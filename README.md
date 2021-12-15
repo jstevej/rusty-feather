@@ -152,6 +152,9 @@ Project Link: [https://github.com/github_username/repo_name](https://github.com/
 <!-- MARKDOWN LINKS & IMAGES -->
 
 [stars-shield]: https://img.shields.io/github/stars/jstevej/rusty-feather?style=for-the-badge
+[stars-url]: https://github.com/jstevej/rusty-feather/stargazers
 [forks-shield]: https://img.shields.io/github/forks/jstevej/rusty-feather?style=for-the-badge
+[forks-url]: https://github.com/jstevej/rusty-feather/network/members
 [license-shield]: https://img.shields.io/github/license/jstevej/rusty-feather?style=for-the-badge
+[license-url]: https://github.com/jstevej/rusty-feather/blob/main/LICENSE.txt
 [product-screenshot]: images/screenshot.png
