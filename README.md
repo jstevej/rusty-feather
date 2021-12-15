@@ -2,9 +2,11 @@
 
 <!-- Project Shields -->
 
+<p align="center">
 [![Stargazers][stars-shield]][stars-url]
 [![Forks][forks-shield]][forks-url]
 [![MIT License][license-shield]][license-url]
+</p>
 
 <!-- PROJECT LOGO -->
 
@@ -81,6 +83,8 @@ If starting from scratch note the following:
 * add `.cargo/config` from [here](https://github.com/rp-rs/rp-hal/blob/main/.cargo/config)
 * add `memory.x` to project root from [here](https://github.com/rp-rs/rp-hal/blob/main/memory.x)
 
+<p align="right">(<a href="#top">back to top</a>)</p>
+
 ## Roadmap
 
   - [x] Red LED
@@ -100,6 +104,8 @@ If starting from scratch note the following:
   - [ ] Servo
   - [ ] SH1107 Display
     - [SH1107 Display Driver](https://github.com/aaron-hardin/sh1107)
+
+<p align="right">(<a href="#top">back to top</a>)</p>
 
 <!--
 ## Contributing
