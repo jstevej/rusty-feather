@@ -1,0 +1,28 @@
+[package]
+name = "rusty-feather"
+version = "0.1.0"
+edition = "2021"
+description = "Experiments with Rust on an Adafruit Feather RP2040"
+authors = ["jstevej <https://github.com/jstevej>"]
+license = "MIT"
+
+[dependencies]
+cortex-m = "0.7.3"
+cortex-m-rt = { version = "0.7", optional = true }
+cortex-m-rtic = "0.6.0-rc.4"
+embedded-hal = "0.2.5"
+feather_rp2040 = { git = "https://github.com/rp-rs/rp-hal.git", branch = "main" }
+embedded-time = "0.12.0"
+nb = "1.0.0" # for ws2812-pio
+panic-halt = "0.2.0"
+pio = "0.1.0"
+rp2040-boot2 = "0.2"
+smart-leds = "0.3.0"
+smart-leds-trait = "0.2.1" # for ws2812-pio
+usb-device = "0.2.8"
+usbd-serial = "0.1.1"
+ws2812-pio = { git = "https://github.com/ithinuel/ws2812-pio-rs", rev = "4f0d81e594ea9934f9c4c38ed9824ad0cce4ebb5" }
+
+[features]
+default = ["rt"]
+rt = ["cortex-m-rt", "feather_rp2040/rt"]
