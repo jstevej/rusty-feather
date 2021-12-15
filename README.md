@@ -2,12 +2,9 @@
 
 <!-- Project Shields -->
 
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
 [![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
+[![Forks][forks-shield]][forks-url]
 [![MIT License][license-shield]][license-url]
-[![LinkedIn][linkedin-shield]][linkedin-url]
 
 <!-- PROJECT LOGO -->
 
@@ -151,3 +148,10 @@ Project Link: [https://github.com/github_username/repo_name](https://github.com/
 * [Othneil Drew's Best README Template](https://github.com/othneildrew/Best-README-Template)
 
 <p align="right">(<a href="#top">back to top</a>)</p>
+
+<!-- MARKDOWN LINKS & IMAGES -->
+
+[stars-shield]: https://img.shields.io/github/stars/jstevej/rusty-feather?style=for-the-badge
+[forks-shield]: https://img.shields.io/github/forks/jstevej/rusty-feather?style=for-the-badge
+[license-shield]: https://img.shields.io/github/license/jstevej/rusty-feather?style=for-the-badge
+[product-screenshot]: images/screenshot.png
