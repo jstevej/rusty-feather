@@ -8,10 +8,12 @@ use rtic::app;
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GD25Q64CS;
 
-#[app(device = feather_rp2040::hal::pac, peripherals = true)]
+#[app(
+    device = feather_rp2040::hal::pac,
+    dispatchers = [ADC_IRQ_FIFO, UART1_IRQ],
+    peripherals = true
+)]
 mod app {
-     static mut USB_BUS: Option<UsbBusAllocator<HalUsbBus>> = None;
-
     use core::iter::once;
     //use cortex_m_rt::entry;
     use embedded_hal::digital::v2::OutputPin;
@@ -26,31 +28,52 @@ mod app {
             pio::PIOExt,
             //sio::Sio,
             Sio,
-            timer::Alarm0,
+            timer::{Alarm0, Alarm1},
             timer::Timer,
             usb::UsbBus as HalUsbBus,
             watchdog::Watchdog,
         },
         Pins, XOSC_CRYSTAL_FREQ,
     };
+    use heapless::{String, Vec};
+    use heapless::spsc::{Consumer, Producer, Queue};
     use smart_leds::{RGB, SmartLedsWrite};
     use usb_device::{class_prelude::*, prelude::*};
     use usbd_serial::SerialPort;
     use ws2812_pio::Ws2812;
 
+    const ALARM1_TICK: Microseconds = Microseconds(5_000_000);
+    const HEARTBEAT_FAST: Microseconds = Microseconds(150_000);
+    const HEARTBEAT_SLOW: Microseconds = Microseconds(800_000);
+    const MSG_SIZE: usize = 64;
+    const USB_RX_SIZE: usize = 128;
+    const USB_TX_SIZE: usize = 1024;
+
+    static mut USB_BUS: Option<UsbBusAllocator<HalUsbBus>> = None;
     #[shared]
     struct Shared {
-        alarm0: Alarm0,
-        red_led: Pin<Gpio13, PushPullOutput>,
-        timer: Timer,
-        usb_device: UsbDevice<'static, HalUsbBus>,
-        usb_serial: SerialPort<'static, HalUsbBus>,
+        timer: Timer, // timer_irq0, timer_irq1
+        usb_tx_p: Producer<'static, u8, USB_TX_SIZE>, // lots
     }
 
     #[local]
-    struct Local {}
+    struct Local {
+        alarm0: Alarm0, // timer_irq0
+        alarm1: Alarm1, // timer_irq1
+        red_led: Pin<Gpio13, PushPullOutput>, // timer_irq0
+        usb_device: UsbDevice<'static, HalUsbBus>, // usbctrl_irq
+        usb_rx_c: Consumer<'static, u8, USB_RX_SIZE>, // usb_rx_service
+        usb_rx_p: Producer<'static, u8, USB_RX_SIZE>, // usbctrl_irq
+        usb_serial: SerialPort<'static, HalUsbBus>, // usbctrl_irq
+        usb_tx_c: Consumer<'static, u8, USB_TX_SIZE>, // usbctrl_irq
+    }
 
-    #[init]
+    #[init(
+        local = [
+            usb_rx_q: Queue<u8, USB_RX_SIZE> = Queue::new(),
+            usb_tx_q: Queue<u8, USB_TX_SIZE> = Queue::new(),
+        ],
+    )]
     fn init(context: init::Context) -> (Shared, Local, init::Monotonics) {
         let mut resets = context.device.RESETS;
         let mut watchdog = Watchdog::new(context.device.WATCHDOG);
@@ -77,9 +100,10 @@ mod app {
         );
         let mut timer = Timer::new(context.device.TIMER, &mut resets);
 
-        // Initialize alarm 0.
+        // Initialize alarms.
 
         let mut alarm0 = timer.alarm_0().unwrap();
+        let mut alarm1 = timer.alarm_1().unwrap();
 
         // Initialize the neopixel.
 
@@ -121,6 +145,8 @@ mod app {
             .device_class(2) // from https://www.usb.org/defined-class-codes
             .build();
 
+        let (usb_rx_p, usb_rx_c) = context.local.usb_rx_q.split();
+        let (usb_tx_p, usb_tx_c) = context.local.usb_tx_q.split();
 
         //let mut delay = cortex_m::delay::Delay::new(context.core.SYST, clocks.system_clock.freq().integer());
 
@@ -128,76 +154,173 @@ mod app {
 
         unsafe { pac::NVIC::unmask(pac::Interrupt::USBCTRL_IRQ); } // TODO: do via function?
         alarm0.enable_interrupt(&mut timer);
+        alarm1.enable_interrupt(&mut timer);
 
         // Schedule first timer alarm. TODO: do with rtic?
 
-        alarm0.schedule(150_000.microseconds()).unwrap();
+        alarm0.schedule(HEARTBEAT_FAST).unwrap();
+        alarm1.schedule(ALARM1_TICK).unwrap();
 
-        (Shared { alarm0, red_led, timer, usb_device, usb_serial }, Local {}, init::Monotonics())
+        (
+            Shared {
+                timer,
+                usb_tx_p,
+            },
+            Local {
+                alarm0,
+                alarm1,
+                red_led,
+                usb_device,
+                usb_rx_c,
+                usb_rx_p,
+                usb_serial,
+                usb_tx_c,
+            },
+            init::Monotonics(),
+        )
     }
+
+    // Priorities:
+    //   - 4 (highest): high-priority tasks
+    //   - 3: reading/writing data from/to USB into queues
+    //   - 2: usb_rx_service (processing commands received over usb)
+    //   - 1 (lowest): low-priority tasks
 
     #[task(
         binds = TIMER_IRQ_0,
-        local = [count: u32 = 0, led_state: bool = true],
-        shared = [alarm0, red_led, timer],
+        local = [alarm0, red_led, count: u32 = 0, led_state: bool = true],
+        priority = 1,
+        shared = [timer],
     )]
-    fn timer_irq_0(mut context: timer_irq_0::Context) {
-        let timer_irq_0::LocalResources { count, led_state } = context.local;
-        let timer_irq_0::SharedResources { alarm0, ref mut red_led, timer } = context.shared;
+    fn timer_irq_0(context: timer_irq_0::Context) {
+        let timer_irq_0::LocalResources { alarm0, red_led, count, led_state } = context.local;
+        let timer_irq_0::SharedResources { mut timer } = context.shared;
 
         if *led_state {
-            red_led.lock(|led| led.set_high().unwrap());
+            red_led.set_high().unwrap();
         } else {
-            red_led.lock(|led| led.set_low().unwrap());
+            red_led.set_low().unwrap();
         }
 
         *led_state = !*led_state;
 
-        (alarm0, timer).lock(|a, t| {
-            a.clear_interrupt(t);
+        timer.lock(|t| {
+            alarm0.clear_interrupt(t);
             *count = *count + 1;
             if *count == 4 {
                 *count = 0;
-                let _ = a.schedule(800_000.microseconds());
+                let _ = alarm0.schedule(HEARTBEAT_SLOW);
             } else {
-                let _ = a.schedule(150_000.microseconds());
+                let _ = alarm0.schedule(HEARTBEAT_FAST);
+            }
+        });
+    }
+
+    #[task(
+        binds = TIMER_IRQ_1,
+        local = [alarm1],
+        priority = 1,
+        shared = [timer, usb_tx_p],
+    )]
+    fn timer_irq_1(context: timer_irq_1::Context) {
+        let timer_irq_1::LocalResources { alarm1 } = context.local;
+        let timer_irq_1::SharedResources { timer, usb_tx_p } = context.shared;
+
+        (timer, usb_tx_p).lock(|t, p| {
+            usb_print(p, &mut String::from("tick\r\n"));
+            alarm1.clear_interrupt(t);
+            let _ = alarm1.schedule(ALARM1_TICK);
+        });
+
+    }
+
+    fn usb_print(producer: &mut Producer<u8, USB_TX_SIZE>, msg: &mut String<MSG_SIZE>) {
+        let vec = unsafe { msg.as_mut_vec() };
+        usb_write(producer, vec);
+    }
+
+    fn usb_write(producer: &mut Producer<u8, USB_TX_SIZE>, msg: &mut Vec<u8, MSG_SIZE>) {
+        //let vec = unsafe { msg.as_mut_vec() };
+
+        for b in msg.iter() {
+            let _ = producer.enqueue(*b);
+        }
+
+        pac::NVIC::pend(pac::Interrupt::USBCTRL_IRQ); // force usb interrupt
+    }
+
+    #[task(
+        priority = 2,
+        local = [usb_rx_c, cmd: Vec<u8, MSG_SIZE> = Vec::new()],
+        shared = [usb_tx_p],
+    )]
+    fn usb_rx_service(context: usb_rx_service::Context) {
+        let usb_rx_service::LocalResources { usb_rx_c, cmd } = context.local;
+        let usb_rx_service::SharedResources { mut usb_tx_p } = context.shared;
+
+        usb_tx_p.lock(|p| {
+            loop {
+                match usb_rx_c.dequeue() {
+                    None => { break; }
+                    Some(b) => {
+                        if b == b'\r' || b == b'\n' {
+                            if cmd.len() > 0 {
+                                let _ = usb_write(p, cmd);
+                                let _ = usb_print(p, &mut String::from("\r\nrx\r\n"));
+                                cmd.clear();
+                            }
+                        } else {
+                            let _ = cmd.push(b);
+                        }
+                    }
+                }
             }
         });
     }
 
     #[task(
         binds = USBCTRL_IRQ,
-        shared = [usb_device, usb_serial],
+        local = [usb_device, usb_rx_p, usb_serial, usb_tx_c],
+        priority = 3,
     )]
     fn usbctrl_irq(context: usbctrl_irq::Context) {
-        let usbctrl_irq::SharedResources { usb_device, usb_serial } = context.shared;
+        let usbctrl_irq::LocalResources { usb_device, usb_rx_p, usb_serial, usb_tx_c } = context.local;
 
-        (usb_device, usb_serial).lock(|d, s| {
-            if d.poll(&mut [s]) {
-                let mut buf = [0u8; 64];
+        // Read from USB into rx queue.
 
-                match s.read(&mut buf) {
-                    Err(_e) => {
-                        // do nothing
-                    }
-                    Ok(0) => {
-                        // do nothing
-                    }
-                    Ok(count) => {
-                        buf.iter_mut().take(count).for_each(|b| {
-                            b.make_ascii_uppercase();
-                        });
+        let mut terminator_seen = false;
 
-                        let mut wr_ptr = &buf[..count];
+        if usb_device.poll(&mut [usb_serial]) {
+            let mut buf = [0u8; 64];
 
-                        while !wr_ptr.is_empty() {
-                            let _ = s.write(wr_ptr).map(|len| {
-                                wr_ptr = &wr_ptr[len..];
-                            });
+            match usb_serial.read(&mut buf) {
+                Err(_e) => {} // do nothing
+                Ok(0) => {} // do nothing
+                Ok(count) => {
+                    buf.iter_mut().take(count).for_each(|b| {
+                        if *b == b'\r' || *b == b'\n' {
+                            terminator_seen = true;
                         }
-                    }
+
+                        let _ = usb_rx_p.enqueue(*b);
+                    });
                 }
             }
-        });
+        }
+
+        if terminator_seen {
+            let _ = usb_rx_service::spawn();
+        }
+
+        // Write from tx queue to USB.
+
+        loop {
+            match usb_tx_c.dequeue() {
+                None => { break; }
+                Some(b) => {
+                    let _ = usb_serial.write(&[b]).unwrap();
+                }
+            }
+        }
     }
 }

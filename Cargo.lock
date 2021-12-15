@@ -580,6 +580,7 @@ dependencies = [
  "embedded-hal",
  "embedded-time",
  "feather_rp2040",
+ "heapless",
  "nb 1.0.0",
  "panic-halt",
  "pio",

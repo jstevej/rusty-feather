@@ -91,9 +91,7 @@ If starting from scratch note the following:
 
   - [x] Red LED
   - [x] Neopixel
-  - [ ] USB serial
-    - [x] send and receive with interrupts
-    - [ ] producer and consumer queues
+  - [x] USB serial
   - [ ] CO2 sensor
   - [ ] E-Ink display
   - [ ] VOC sensor
@@ -153,6 +151,7 @@ Project Link: [https://github.com/github_username/repo_name](https://github.com/
 * [Adafruit Feather RP2040 Schematic](https://learn.adafruit.com/assets/100337)
 * [Adafruit Feather RP2040 Pinout](https://learn.adafruit.com/assets/105204)
 * [RP2040 Datasheet](https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf)
+* [RTIC](https://rtic.rs/dev/book/en/)
 * [Othneil Drew's Best README Template](https://github.com/othneildrew/Best-README-Template)
 
 <p align="right">(<a href="#top">back to top</a>)</p>
