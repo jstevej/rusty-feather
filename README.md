@@ -3,9 +3,11 @@
 <!-- Project Shields -->
 
 <p align="center">
-[![Stargazers][stars-shield]][stars-url]
-[![Forks][forks-shield]][forks-url]
-[![MIT License][license-shield]][license-url]
+
+  [![Stargazers][stars-shield]][stars-url]
+  [![Forks][forks-shield]][forks-url]
+  [![MIT License][license-shield]][license-url]
+
 </p>
 
 <!-- PROJECT LOGO -->
