@@ -588,7 +588,6 @@ dependencies = [
  "embedded-time",
  "feather_rp2040",
  "heapless",
- "nb 1.0.0",
  "panic-halt",
  "pio",
  "rp2040-boot2",
@@ -597,7 +596,6 @@ dependencies = [
  "ufmt",
  "usb-device",
  "usbd-serial",
- "ws2812-pio",
 ]
 
 [[package]]
@@ -742,18 +740,4 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ee8f19f9d74293faf70901bc20ad067dc1ad390d2cbf1e3f75f721ffee908b6"
 dependencies = [
  "vcell",
-]
-
-[[package]]
-name = "ws2812-pio"
-version = "0.1.0"
-source = "git+https://github.com/ithinuel/ws2812-pio-rs?rev=4f0d81e594ea9934f9c4c38ed9824ad0cce4ebb5#4f0d81e594ea9934f9c4c38ed9824ad0cce4ebb5"
-dependencies = [
- "cortex-m",
- "embedded-hal",
- "embedded-time",
- "nb 1.0.0",
- "pio",
- "rp2040-hal",
- "smart-leds-trait",
 ]
