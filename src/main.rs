@@ -35,9 +35,10 @@ mod app {
         },
         Pins, XOSC_CRYSTAL_FREQ,
     };
-    use heapless::{String, Vec};
+    use heapless::Vec;
     use heapless::spsc::{Consumer, Producer, Queue};
     use smart_leds::{RGB, SmartLedsWrite};
+    //use ufmt::{derive::uDebug, uwrite};
     use usb_device::{class_prelude::*, prelude::*};
     use usbd_serial::SerialPort;
     use ws2812_pio::Ws2812;
@@ -45,27 +46,29 @@ mod app {
     const ALARM1_TICK: Microseconds = Microseconds(5_000_000);
     const HEARTBEAT_FAST: Microseconds = Microseconds(150_000);
     const HEARTBEAT_SLOW: Microseconds = Microseconds(800_000);
+    const MAX_TOKENS: usize = 4;
     const MSG_SIZE: usize = 64;
+    const TERMINATORS: [u8; 2] = [b'\r', b'\n'];
     const USB_RX_SIZE: usize = 128;
     const USB_TX_SIZE: usize = 1024;
 
     static mut USB_BUS: Option<UsbBusAllocator<HalUsbBus>> = None;
     #[shared]
     struct Shared {
-        timer: Timer, // timer_irq0, timer_irq1
-        usb_tx_p: Producer<'static, u8, USB_TX_SIZE>, // lots
+        timer: Timer,
+        usb_tx_p: Producer<'static, u8, USB_TX_SIZE>,
     }
 
     #[local]
     struct Local {
-        alarm0: Alarm0, // timer_irq0
-        alarm1: Alarm1, // timer_irq1
-        red_led: Pin<Gpio13, PushPullOutput>, // timer_irq0
-        usb_device: UsbDevice<'static, HalUsbBus>, // usbctrl_irq
-        usb_rx_c: Consumer<'static, u8, USB_RX_SIZE>, // usb_rx_service
-        usb_rx_p: Producer<'static, u8, USB_RX_SIZE>, // usbctrl_irq
-        usb_serial: SerialPort<'static, HalUsbBus>, // usbctrl_irq
-        usb_tx_c: Consumer<'static, u8, USB_TX_SIZE>, // usbctrl_irq
+        alarm0: Alarm0,
+        alarm1: Alarm1,
+        red_led: Pin<Gpio13, PushPullOutput>,
+        usb_device: UsbDevice<'static, HalUsbBus>,
+        usb_rx_c: Consumer<'static, u8, USB_RX_SIZE>,
+        usb_rx_p: Producer<'static, u8, USB_RX_SIZE>,
+        usb_serial: SerialPort<'static, HalUsbBus>,
+        usb_tx_c: Consumer<'static, u8, USB_TX_SIZE>,
     }
 
     #[init(
@@ -108,7 +111,7 @@ mod app {
         // Initialize the neopixel.
 
         let (mut pio, sm0, _, _, _) = context.device.PIO0.split(&mut resets);
-        let mut ws = Ws2812::new(
+        let mut neopixel = Ws2812::new(
             pins.neopixel.into_mode(),
             &mut pio,
             sm0,
@@ -119,7 +122,7 @@ mod app {
         neopixel_value.r = 16;
         neopixel_value.g = 8;
         neopixel_value.b = 48;
-        ws.write(once(neopixel_value)).unwrap();
+        neopixel.write(once(neopixel_value)).unwrap();
 
 
         // Initialize red LED.
@@ -227,23 +230,38 @@ mod app {
         let timer_irq_1::SharedResources { timer, usb_tx_p } = context.shared;
 
         (timer, usb_tx_p).lock(|t, p| {
-            usb_print(p, &mut String::from("tick\r\n"));
+            usb_writeln(p, "tick".bytes());
             alarm1.clear_interrupt(t);
             let _ = alarm1.schedule(ALARM1_TICK);
         });
 
     }
 
-    fn usb_print(producer: &mut Producer<u8, USB_TX_SIZE>, msg: &mut String<MSG_SIZE>) {
-        let vec = unsafe { msg.as_mut_vec() };
-        usb_write(producer, vec);
+    // usb_write(producer, "foo".bytes());
+    // usb_write(producer, msg.bytes()); // msg: &String<N>
+    // usb_write(producer, msg.iter().cloned()); // msg: Vec<u8, N>
+    fn usb_write<I>(producer: &mut Producer<u8, USB_TX_SIZE>, msg: I)
+        where
+            I: Iterator<Item = u8>
+    {
+
+        for b in msg {
+            let _ = producer.enqueue(b);
+        }
+
+        pac::NVIC::pend(pac::Interrupt::USBCTRL_IRQ); // force usb interrupt
     }
 
-    fn usb_write(producer: &mut Producer<u8, USB_TX_SIZE>, msg: &mut Vec<u8, MSG_SIZE>) {
-        //let vec = unsafe { msg.as_mut_vec() };
+    fn usb_writeln<I>(producer: &mut Producer<u8, USB_TX_SIZE>, msg: I)
+        where
+            I: Iterator<Item = u8>
+    {
+        for b in msg {
+            let _ = producer.enqueue(b);
+        }
 
-        for b in msg.iter() {
-            let _ = producer.enqueue(*b);
+        for b in TERMINATORS {
+            let _ = producer.enqueue(b);
         }
 
         pac::NVIC::pend(pac::Interrupt::USBCTRL_IRQ); // force usb interrupt
@@ -251,11 +269,15 @@ mod app {
 
     #[task(
         priority = 2,
-        local = [usb_rx_c, cmd: Vec<u8, MSG_SIZE> = Vec::new()],
+        local = [
+            usb_rx_c,
+            cmd: Vec<u8, MSG_SIZE> = Vec::new(),
+            resp: Vec<u8, MSG_SIZE> = Vec::new(),
+        ],
         shared = [usb_tx_p],
     )]
     fn usb_rx_service(context: usb_rx_service::Context) {
-        let usb_rx_service::LocalResources { usb_rx_c, cmd } = context.local;
+        let usb_rx_service::LocalResources { usb_rx_c, cmd, resp } = context.local;
         let usb_rx_service::SharedResources { mut usb_tx_p } = context.shared;
 
         usb_tx_p.lock(|p| {
@@ -263,12 +285,29 @@ mod app {
                 match usb_rx_c.dequeue() {
                     None => { break; }
                     Some(b) => {
-                        if b == b'\r' || b == b'\n' {
+                        if TERMINATORS.contains(&b) {
                             if cmd.len() > 0 {
-                                let _ = usb_write(p, cmd);
-                                let _ = usb_print(p, &mut String::from("\r\nrx\r\n"));
-                                cmd.clear();
+                                // TODO: allocate tokens statically
+                                let mut tokens: Vec<&[u8], MAX_TOKENS> = Vec::new();
+                                tokenize(cmd, &mut tokens);
+
+                                if tokens[0] == b"echo" {
+                                    resp.clear();
+                                    let _ = resp.extend_from_slice(b"echo:");
+
+                                    for t in tokens.iter().rev().take(tokens.len() - 1).rev() {
+                                        let _ = resp.push(b' ');
+                                        let _ = resp.extend_from_slice(t);
+                                    }
+
+                                    let _ = resp.extend_from_slice(&TERMINATORS);
+                                    let _ = usb_write(p, resp.iter().cloned());
+                                } else {
+                                    usb_writeln(p, "error: unknown command".bytes());
+                                }
                             }
+
+                            cmd.clear();
                         } else {
                             let _ = cmd.push(b);
                         }
@@ -276,6 +315,35 @@ mod app {
                 }
             }
         });
+    }
+
+    fn tokenize<'a>(cmd: &'a Vec<u8, MSG_SIZE>, tokens: &mut Vec<&'a [u8], MAX_TOKENS>) {
+        tokens.clear();
+
+        let mut start: Option<usize> = None;
+
+        for i in 0..cmd.len() {
+            match start {
+                Some(s) => {
+                    if cmd[i] == b' ' {
+                        let _ = tokens.push(&cmd[s..i]);
+                        start = None;
+                    }
+                }
+                None => {
+                    if cmd[i] != b' ' {
+                        start = Some(i);
+                    }
+                }
+            }
+        }
+
+        match start {
+            Some(s) => {
+                let _ = tokens.push(&cmd[s..cmd.len()]);
+            }
+            None => {} // do nothing
+        }
     }
 
     #[task(
@@ -298,7 +366,7 @@ mod app {
                 Ok(0) => {} // do nothing
                 Ok(count) => {
                     buf.iter_mut().take(count).for_each(|b| {
-                        if *b == b'\r' || *b == b'\n' {
+                        if TERMINATORS.contains(b) {
                             terminator_seen = true;
                         }
 
