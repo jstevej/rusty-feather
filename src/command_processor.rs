@@ -1,6 +1,11 @@
 use core::iter::once;
+use feather_rp2040::hal::{
+    gpio::pin::bank0::Gpio16,
+    pac::PIO0,
+    pio::SM0,
+};
 use heapless::{String, Vec};
-use smart_leds::{RGB};
+use smart_leds::{RGB, SmartLedsWrite};
 //use ufmt::{derive::uDebug, uwrite};
 
 use crate::usb_writer::UsbWriter;
@@ -33,7 +38,7 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
     pub fn process<const USB_TX_SIZE: usize>(
         &mut self,
         usb_writer: &mut UsbWriter<USB_TX_SIZE>,
-        neopixel: &mut Ws2812,
+        neopixel: &mut Ws2812<PIO0, SM0, Gpio16>,
         cmd: &String<MSG_SIZE>
     ) {
         let mut tokens: Vec<&str, MAX_TOKENS> = Vec::new();
@@ -42,7 +47,7 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
             let _ = tokens.push(token);
         }
 
-        if tokens[0] == "nop" {
+        if tokens[0] == "echo" {
             // do nothing
         } else if tokens[0] == "neo" {
             if tokens.len() == 2 {

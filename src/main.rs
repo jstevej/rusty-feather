@@ -31,8 +31,10 @@ mod app {
         hal::{
             clocks::{init_clocks_and_plls, Clock},
             gpio::{Pin, PushPullOutput},
-            gpio::pin::bank0::Gpio13,
+            gpio::pin::bank0::{Gpio13, Gpio16},
             pac,
+            pac::{PIO0},
+            pio::{PIOExt, SM0},
             Sio,
             timer::{Alarm0, Alarm1},
             timer::Timer,
@@ -72,7 +74,7 @@ mod app {
         alarm0: Alarm0,
         alarm1: Alarm1,
         command_processor: CommandProcessor<MSG_SIZE>,
-        neopixel: Ws2812,
+        neopixel: Ws2812<PIO0, SM0, Gpio16>,
         red_led: Pin<Gpio13, PushPullOutput>,
         usb_device: UsbDevice<'static, HalUsbBus>,
         usb_rx_c: Consumer<'static, u8, USB_RX_SIZE>,
@@ -120,10 +122,11 @@ mod app {
 
         // Initialize the neopixel.
 
+        let (mut pio0, sm0, _, _, _) = context.device.PIO0.split(&mut resets);
         let neopixel = Ws2812::new(
             pins.neopixel.into_mode(),
-            context.device.PIO0,
-            &mut resets,
+            &mut pio0,
+            sm0,
             clocks.peripheral_clock.freq(),
         );
 
