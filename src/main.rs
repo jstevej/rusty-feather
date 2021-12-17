@@ -24,14 +24,16 @@ mod ws2812;
     peripherals = true
 )]
 mod app {
-    //use cortex_m_rt::entry;
+    use cortex_m::delay::Delay;
     use embedded_hal::digital::v2::OutputPin;
-    use embedded_time::{duration::*};
+    use embedded_hal::prelude::{_embedded_hal_blocking_i2c_Read, _embedded_hal_blocking_i2c_Write};
+    use embedded_time::{duration::*, rate::*};
     use feather_rp2040::{
         hal::{
             clocks::{init_clocks_and_plls, Clock},
-            gpio::{Pin, PushPullOutput},
-            gpio::pin::bank0::{Gpio13, Gpio16},
+            gpio::{FunctionI2C, Pin, PushPullOutput},
+            gpio::pin::bank0::{Gpio2, Gpio3, Gpio13, Gpio16},
+            i2c::{I2C},
             pac,
             pac::{PIO0},
             pio::{PIOExt, SM0},
@@ -74,6 +76,8 @@ mod app {
         alarm0: Alarm0,
         alarm1: Alarm1,
         command_processor: CommandProcessor<MSG_SIZE>,
+        delay: Delay,
+        i2c: I2C<pac::I2C1, (Pin<Gpio2, FunctionI2C>, Pin<Gpio3, FunctionI2C>)>,
         neopixel: Ws2812<PIO0, SM0, Gpio16>,
         red_led: Pin<Gpio13, PushPullOutput>,
         usb_device: UsbDevice<'static, HalUsbBus>,
@@ -120,6 +124,21 @@ mod app {
         let mut alarm0 = timer.alarm_0().unwrap();
         let mut alarm1 = timer.alarm_1().unwrap();
 
+        // Initialize delay.
+
+        let delay = Delay::new(context.core.SYST, clocks.system_clock.freq().integer());
+
+        // Initialize I2C.
+
+        let i2c = I2C::i2c1(
+            context.device.I2C1,
+            pins.sda.into_mode(),
+            pins.scl.into_mode(),
+            100.kHz(),
+            &mut resets,
+            clocks.system_clock.freq()
+        );
+
         // Initialize the neopixel.
 
         let (mut pio0, sm0, _, _, _) = context.device.PIO0.split(&mut resets);
@@ -157,8 +176,6 @@ mod app {
         let (usb_tx_p, usb_tx_c) = context.local.usb_tx_q.split();
         let usb_writer = UsbWriter::new(usb_tx_p, &TERM_BYTES);
 
-        //let mut delay = cortex_m::delay::Delay::new(context.core.SYST, clocks.system_clock.freq().integer());
-
         // Create the command processor.
 
         let command_processor: CommandProcessor<MSG_SIZE> = CommandProcessor::new();
@@ -183,6 +200,8 @@ mod app {
                 alarm0,
                 alarm1,
                 command_processor,
+                delay,
+                i2c,
                 neopixel,
                 red_led,
                 usb_device,
@@ -263,20 +282,34 @@ mod app {
 
     #[task(
         binds = TIMER_IRQ_1,
-        local = [alarm1],
+        local = [alarm1, delay, i2c],
         priority = 1,
         shared = [timer, usb_writer],
     )]
     fn timer_irq_1(context: timer_irq_1::Context) {
-        let timer_irq_1::LocalResources { alarm1 } = context.local;
+        const SCD41_ADDRESS: u8 = 0x62; // SCD41 max speed is 100 kHz
+        const SCD41_GET_SERIAL_NUMBER: [u8; 2] = [0x36, 0x82];
+        let timer_irq_1::LocalResources { alarm1, delay, i2c } = context.local;
         let timer_irq_1::SharedResources { timer, usb_writer } = context.shared;
+        let mut buf: [u8; 16] = [0; 16];
 
         (timer, usb_writer).lock(|t, u| {
-            u.sts("tick");
+            let wr = i2c.write(SCD41_ADDRESS, &SCD41_GET_SERIAL_NUMBER);
+            match wr {
+                Ok(_) => {
+                    u.sts("i2c write success");
+                    delay.delay_ms(5); // datasheet says 1 ms
+                    let rr = i2c.read(SCD41_ADDRESS, &mut buf);
+                    match rr {
+                        Ok(_) => u.sts("i2c read success"),
+                        Err(_) => u.sts("i2c read failed"),
+                    }
+                },
+                Err(_) => u.sts("i2c write failed"),
+            }
             alarm1.clear_interrupt(t);
             let _ = alarm1.schedule(ALARM1_TICK);
         });
-
     }
 
     #[task(
