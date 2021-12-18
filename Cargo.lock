@@ -381,12 +381,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "panic-halt"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de96540e0ebde571dc55c73d60ef407c653844e6f9a1e2fdbd40c07b9252d812"
-
-[[package]]
 name = "paste"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -588,7 +582,6 @@ dependencies = [
  "embedded-time",
  "feather_rp2040",
  "heapless",
- "panic-halt",
  "pio",
  "rp2040-boot2",
  "smart-leds",

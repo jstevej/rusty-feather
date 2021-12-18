@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 
-use panic_halt as _;
 use rtic::app;
 
 #[link_section = ".boot2"] // second stage bootloader
@@ -10,10 +9,14 @@ pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GD25Q64CS;
 
 mod command_processor;
 mod i2c;
+mod panic_led_halt;
 mod neopixel;
 mod scd41;
 mod usb_writer;
 mod ws2812;
+
+#[allow(unused_imports)]
+use crate::panic_led_halt as _;
 
 // Task Priorities:
 //   * 4 (highest): high-priority tasks
