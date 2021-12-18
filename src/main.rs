@@ -9,6 +9,9 @@ use rtic::app;
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GD25Q64CS;
 
 mod command_processor;
+mod i2c;
+mod neopixel;
+mod scd41;
 mod usb_writer;
 mod ws2812;
 
@@ -24,19 +27,17 @@ mod ws2812;
     peripherals = true
 )]
 mod app {
-    use cortex_m::delay::Delay;
+    //use cortex_m::delay::Delay;
     use embedded_hal::digital::v2::OutputPin;
-    use embedded_hal::prelude::{_embedded_hal_blocking_i2c_Read, _embedded_hal_blocking_i2c_Write};
     use embedded_time::{duration::*, rate::*};
     use feather_rp2040::{
         hal::{
             clocks::{init_clocks_and_plls, Clock},
-            gpio::{FunctionI2C, Pin, PushPullOutput},
-            gpio::pin::bank0::{Gpio2, Gpio3, Gpio13, Gpio16},
-            i2c::{I2C},
+            gpio::{Pin, PushPullOutput},
+            gpio::pin::bank0::{Gpio13},
+            i2c::I2C,
             pac,
-            pac::{PIO0},
-            pio::{PIOExt, SM0},
+            pio::{PIOExt},
             Sio,
             timer::{Alarm0, Alarm1},
             timer::Timer,
@@ -47,12 +48,17 @@ mod app {
     };
     use heapless::String;
     use heapless::spsc::{Consumer, Producer, Queue};
+    //use ufmt::{derive::uDebug, uwrite};
+    use ufmt::uwrite;
     use usb_device::{class_prelude::*, prelude::*};
     use usbd_serial::SerialPort;
 
     use crate::command_processor::CommandProcessor;
-    use crate::usb_writer::UsbWriter;
+    use crate::neopixel;
+    use crate::scd41;
+    use crate::usb_writer::{USB_TX_SIZE, UsbWriter};
     use crate::ws2812::Ws2812;
+    use crate::i2c as FeatherI2C;
 
     const ALARM1_TICK: Microseconds = Microseconds(5_000_000);
     const HEARTBEAT_FAST: Microseconds = Microseconds(150_000);
@@ -60,14 +66,13 @@ mod app {
     const MSG_SIZE: usize = 64;
     const TERM_BYTES: [u8; 2] = [b'\r', b'\n'];
     const USB_RX_SIZE: usize = 128;
-    const USB_TX_SIZE: usize = 1024;
 
     static mut USB_BUS: Option<UsbBusAllocator<HalUsbBus>> = None;
 
     #[shared]
     struct Shared {
         timer: Timer,
-        usb_writer: UsbWriter<'static, USB_TX_SIZE>,
+        usb_writer: UsbWriter<'static>,
     }
 
     #[local]
@@ -76,9 +81,9 @@ mod app {
         alarm0: Alarm0,
         alarm1: Alarm1,
         command_processor: CommandProcessor<MSG_SIZE>,
-        delay: Delay,
-        i2c: I2C<pac::I2C1, (Pin<Gpio2, FunctionI2C>, Pin<Gpio3, FunctionI2C>)>,
-        neopixel: Ws2812<PIO0, SM0, Gpio16>,
+        //delay: Delay,
+        i2c: FeatherI2C::FeatherI2C,
+        neopixel: neopixel::FeatherNeopixel,
         red_led: Pin<Gpio13, PushPullOutput>,
         usb_device: UsbDevice<'static, HalUsbBus>,
         usb_rx_c: Consumer<'static, u8, USB_RX_SIZE>,
@@ -126,11 +131,12 @@ mod app {
 
         // Initialize delay.
 
-        let delay = Delay::new(context.core.SYST, clocks.system_clock.freq().integer());
+        //let delay = Delay::new(context.core.SYST, clocks.system_clock.freq().integer());
 
         // Initialize I2C.
 
-        let i2c = I2C::i2c1(
+        let i2c = FeatherI2C::feather_i2c_init!(
+        //let i2c = I2C::i2c1(
             context.device.I2C1,
             pins.sda.into_mode(),
             pins.scl.into_mode(),
@@ -142,11 +148,11 @@ mod app {
         // Initialize the neopixel.
 
         let (mut pio0, sm0, _, _, _) = context.device.PIO0.split(&mut resets);
-        let neopixel = Ws2812::new(
+        let neopixel = neopixel::feather_neopixel_init!(
             pins.neopixel.into_mode(),
             &mut pio0,
             sm0,
-            clocks.peripheral_clock.freq(),
+            clocks.peripheral_clock.freq()
         );
 
         // Initialize red LED.
@@ -200,7 +206,7 @@ mod app {
                 alarm0,
                 alarm1,
                 command_processor,
-                delay,
+                //delay,
                 i2c,
                 neopixel,
                 red_led,
@@ -282,31 +288,55 @@ mod app {
 
     #[task(
         binds = TIMER_IRQ_1,
-        local = [alarm1, delay, i2c],
+        local = [alarm1, firstTime: bool = true, periodicMeasurementStarted: bool = false, i2c],
         priority = 1,
         shared = [timer, usb_writer],
     )]
     fn timer_irq_1(context: timer_irq_1::Context) {
-        const SCD41_ADDRESS: u8 = 0x62; // SCD41 max speed is 100 kHz
-        const SCD41_GET_SERIAL_NUMBER: [u8; 2] = [0x36, 0x82];
-        let timer_irq_1::LocalResources { alarm1, delay, i2c } = context.local;
+        let timer_irq_1::LocalResources { alarm1, firstTime, periodicMeasurementStarted, i2c } = context.local;
         let timer_irq_1::SharedResources { timer, usb_writer } = context.shared;
-        let mut buf: [u8; 16] = [0; 16];
 
         (timer, usb_writer).lock(|t, u| {
-            let wr = i2c.write(SCD41_ADDRESS, &SCD41_GET_SERIAL_NUMBER);
-            match wr {
-                Ok(_) => {
-                    u.sts("i2c write success");
-                    delay.delay_ms(5); // datasheet says 1 ms
-                    let rr = i2c.read(SCD41_ADDRESS, &mut buf);
-                    match rr {
-                        Ok(_) => u.sts("i2c read success"),
-                        Err(_) => u.sts("i2c read failed"),
-                    }
-                },
-                Err(_) => u.sts("i2c write failed"),
+            if *firstTime {
+                u.inf("hello");
+                *firstTime = false;
             }
+
+            if !*periodicMeasurementStarted {
+                match scd41::start_periodic_measurement(i2c) {
+                    Ok(_) => {
+                        u.inf("started periodic measurement");
+                        *periodicMeasurementStarted = true;
+                    },
+                    Err(_) => u.err("failed starting periodic measurement"),
+                }
+                *periodicMeasurementStarted = true;
+            } else {
+                match scd41::get_data_ready_status(i2c, u) {
+                    Ok(_) => {
+                        u.dbg("data is ready");
+                        //match scd41::get_serial_number(i2c, u) {
+                        //    Ok(serial) => {
+                        //        let mut s: String<MSG_SIZE> = String::new();
+                        //        let _ = uwrite!(s, "serial number: {}", serial);
+                        //        u.sinf(s.as_str());
+                        //    },
+                        //    Err(_) => u.serr("failed reading serial number"),
+                        //}
+
+                        match scd41::read_measurement(i2c, u) {
+                            Ok(meas) => {
+                                let mut s: String<MSG_SIZE> = String::new();
+                                let _ = uwrite!(s, "CO2: {} ppm", meas.co2);
+                                u.inf(s.as_str());
+                            },
+                            Err(_) => u.err("failed reading measurement"),
+                        }
+                    },
+                    Err(_) => u.err("data not ready"),
+                }
+            }
+
             alarm1.clear_interrupt(t);
             let _ = alarm1.schedule(ALARM1_TICK);
         });

@@ -1,15 +1,9 @@
 use core::iter::once;
-use feather_rp2040::hal::{
-    gpio::pin::bank0::Gpio16,
-    pac::PIO0,
-    pio::SM0,
-};
 use heapless::{String, Vec};
 use smart_leds::{RGB, SmartLedsWrite};
-//use ufmt::{derive::uDebug, uwrite};
 
+use crate::neopixel::FeatherNeopixel;
 use crate::usb_writer::UsbWriter;
-use crate::ws2812::Ws2812;
 
 const MAX_TOKENS: usize = 4;
 
@@ -35,10 +29,10 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
         self.resp.as_str()
     }
 
-    pub fn process<const USB_TX_SIZE: usize>(
+    pub fn process(
         &mut self,
-        usb_writer: &mut UsbWriter<USB_TX_SIZE>,
-        neopixel: &mut Ws2812<PIO0, SM0, Gpio16>,
+        usb_writer: &mut UsbWriter,
+        neopixel: &mut FeatherNeopixel,
         cmd: &String<MSG_SIZE>
     ) {
         let mut tokens: Vec<&str, MAX_TOKENS> = Vec::new();
@@ -61,7 +55,7 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
                     "white" => { let _ = neopixel.write(once(RGB::from((16, 16, 16)))); },
                     "yellow" => { let _ = neopixel.write(once(RGB::from((16, 16, 0)))); },
                     _ => {
-                        usb_writer.err(self.assemble(tokens));
+                        usb_writer.resp_err("unknown color");
                         return;
                     }
                 }
@@ -74,16 +68,19 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
                     let value: RGB<u8> = RGB::new(r, g, b);
                     let _ = neopixel.write(once(value));
                 } else {
-                    usb_writer.err("invalid rgb value");
+                    usb_writer.resp_err("invalid rgb value");
                     return;
                 }
             }
+        } else if tokens[0] == "panic" {
+            let x = [0, 1, 2];
+            let i = x.len() + 1;
+            let _y = x[i];
         } else {
-            usb_writer.err("unknown command");
+            usb_writer.resp_err("unknown command");
             return;
         }
 
-        usb_writer.ack(self.assemble(tokens));
+        usb_writer.resp_ack(self.assemble(tokens));
     }
 }
-
