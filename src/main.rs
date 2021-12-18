@@ -301,17 +301,17 @@ mod app {
 
         (timer, usb_writer).lock(|t, u| {
             if *firstTime {
-                u.inf("hello");
+                u.sts("hello");
                 *firstTime = false;
             }
 
             if !*periodicMeasurementStarted {
                 match scd41::start_periodic_measurement(i2c) {
                     Ok(_) => {
-                        u.inf("started periodic measurement");
+                        u.dbg("started periodic measurement");
                         *periodicMeasurementStarted = true;
                     },
-                    Err(_) => u.err("failed starting periodic measurement"),
+                    Err(_) => u.dbg("failed starting periodic measurement"),
                 }
                 *periodicMeasurementStarted = true;
             } else {
@@ -331,12 +331,12 @@ mod app {
                             Ok(meas) => {
                                 let mut s: String<MSG_SIZE> = String::new();
                                 let _ = uwrite!(s, "CO2: {} ppm", meas.co2);
-                                u.inf(s.as_str());
+                                u.dbg(s.as_str());
                             },
-                            Err(_) => u.err("failed reading measurement"),
+                            Err(_) => u.dbg("failed reading measurement"),
                         }
                     },
-                    Err(_) => u.err("data not ready"),
+                    Err(_) => u.dbg("data not ready"),
                 }
             }
 

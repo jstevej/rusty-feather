@@ -13,28 +13,24 @@ impl<'a> UsbWriter<'a> {
         Self { producer, term_bytes }
     }
 
+    pub fn ack(&mut self, msg: &str) {
+        self.writeln(Some("@ ".bytes()), msg.bytes());
+    }
+
     pub fn dbg(&mut self, msg: &str) {
         self.writeln(Some("~ ".bytes()), msg.bytes());
     }
 
     pub fn err(&mut self, msg: &str) {
-        self.writeln(Some("* ".bytes()), msg.bytes());
-    }
-
-    pub fn inf(&mut self, msg: &str) {
-        self.writeln(Some("$ ".bytes()), msg.bytes());
-    }
-
-    pub fn resp_ack(&mut self, msg: &str) {
-        self.writeln(Some("@ ".bytes()), msg.bytes());
-    }
-
-    pub fn resp_err(&mut self, msg: &str) {
         self.writeln(Some("! ".bytes()), msg.bytes());
     }
 
-    pub fn resp_inf(&mut self, msg: &str) {
+    pub fn inf(&mut self, msg: &str) {
         self.writeln(Some("> ".bytes()), msg.bytes());
+    }
+
+    pub fn sts(&mut self, msg: &str) {
+        self.writeln(Some("$ ".bytes()), msg.bytes());
     }
 
     // usage examples for msg:

@@ -17,7 +17,7 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
         Self { resp }
     }
 
-    fn assemble(&mut self, tokens: Vec<&str, MAX_TOKENS>) -> &str {
+    fn assemble(&mut self, tokens: &Vec<&str, MAX_TOKENS>) -> &str {
         self.resp.clear();
 
         for t in tokens.iter().take(tokens.len() - 1) {
@@ -42,7 +42,7 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
         }
 
         if tokens[0] == "echo" {
-            // do nothing
+            usb_writer.inf(self.assemble(&tokens));
         } else if tokens[0] == "neo" {
             if tokens.len() == 2 {
                 match tokens[1] {
@@ -55,7 +55,7 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
                     "white" => { let _ = neopixel.write(once(RGB::from((16, 16, 16)))); },
                     "yellow" => { let _ = neopixel.write(once(RGB::from((16, 16, 0)))); },
                     _ => {
-                        usb_writer.resp_err("unknown color");
+                        usb_writer.err("unknown color");
                         return;
                     }
                 }
@@ -68,19 +68,22 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
                     let value: RGB<u8> = RGB::new(r, g, b);
                     let _ = neopixel.write(once(value));
                 } else {
-                    usb_writer.resp_err("invalid rgb value");
+                    usb_writer.err("invalid rgb value");
                     return;
                 }
+            } else {
+                usb_writer.err("invalid arguments");
+                return;
             }
         } else if tokens[0] == "panic" {
             let x = [0, 1, 2];
             let i = x.len() + 1;
             let _y = x[i];
         } else {
-            usb_writer.resp_err("unknown command");
+            usb_writer.err("unknown command");
             return;
         }
 
-        usb_writer.resp_ack(self.assemble(tokens));
+        usb_writer.ack(tokens[0]);
     }
 }
