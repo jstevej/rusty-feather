@@ -3,8 +3,8 @@ use feather_rp2040::hal::i2c;
 use heapless::String;
 use ufmt::uwrite;
 
+use crate::console::debug;
 use crate::i2c::FeatherI2C;
-use crate::usb_writer::UsbWriter;
 
 // Note: maximum speed is 100 kHz.
 
@@ -43,7 +43,7 @@ fn calc_crc(data: &[u8], len: usize) -> u8 {
 const MAX_READ_BYTES: usize = 16;
 
 #[allow(dead_code)]
-fn read_data_dbg(i2c: &mut FeatherI2C, cmd: u16, buf: &mut [u16], u: &mut UsbWriter) -> Result<(), Error> {
+fn read_data_dbg(i2c: &mut FeatherI2C, cmd: u16, buf: &mut [u16]) -> Result<(), Error> {
     let mut s: String<64> = String::new();
     let cmd_bytes: [u8; 2] = [((cmd & 0xff00) >> 8) as u8, (cmd & 0x00ff) as u8];
     let _ = i2c.write(ADDRESS, &cmd_bytes)?;
@@ -56,7 +56,7 @@ fn read_data_dbg(i2c: &mut FeatherI2C, cmd: u16, buf: &mut [u16], u: &mut UsbWri
         let crc = calc_crc(&word, 2);
         s.clear();
         let _ = uwrite!(s, "[{}, {}, {}] -> {}", word[0], word[1], word[2], crc);
-        u.dbg(s.as_str());
+        debug(s.as_str());
         if crc != word[2] {
             return Err(Error::InvalidChecksum);
         }
@@ -115,10 +115,10 @@ pub struct Measurement {
 }
 
 #[allow(dead_code)]
-pub fn read_measurement(i2c: &mut FeatherI2C, u: &mut UsbWriter) -> Result<Measurement, Error> {
-    u.dbg("reading measurements");
+pub fn read_measurement(i2c: &mut FeatherI2C) -> Result<Measurement, Error> {
+    debug("reading measurements");
     let mut buf: [u16; 3] = [0; 3];
-    let _ = read_data_dbg(i2c, 0xec05, &mut buf, u)?;
+    let _ = read_data_dbg(i2c, 0xec05, &mut buf)?;
 
     let co2 = buf[0]; // QU0.16
 
@@ -206,10 +206,10 @@ pub fn start_low_power_periodic_measurement(i2c: &mut FeatherI2C) -> Result<(), 
 }
 
 #[allow(dead_code)]
-pub fn get_data_ready_status(i2c: &mut FeatherI2C, u: &mut UsbWriter) -> Result<bool, Error> {
-    u.dbg("reading data ready");
+pub fn get_data_ready_status(i2c: &mut FeatherI2C) -> Result<bool, Error> {
+    debug("reading data ready");
     let mut buf: [u16; 1] = [0; 1];
-    let _ = read_data_dbg(i2c, 0xe4b8, &mut buf, u)?;
+    let _ = read_data_dbg(i2c, 0xe4b8, &mut buf)?;
     Ok(buf[0] & 0x07ff != 0)
 }
 
@@ -220,10 +220,10 @@ pub fn persist_settings(i2c: &mut FeatherI2C) -> Result<(), Error> {
 }
 
 #[allow(dead_code)]
-pub fn get_serial_number(i2c: &mut FeatherI2C, u: &mut UsbWriter) -> Result<u64, Error> {
-    u.dbg("getting serial number");
+pub fn get_serial_number(i2c: &mut FeatherI2C) -> Result<u64, Error> {
+    debug("getting serial number");
     let mut buf: [u16; 3] = [0; 3];
-    let _ = read_data_dbg(i2c, 0x3682, &mut buf, u)?;
+    let _ = read_data_dbg(i2c, 0x3682, &mut buf)?;
     Ok(((buf[0] as u64) << 32) | ((buf[1] as u64) << 16) | (buf[2] as u64))
 }
 

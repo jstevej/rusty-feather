@@ -8,11 +8,11 @@ use rtic::app;
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GD25Q64CS;
 
 mod command_processor;
+mod console;
 mod i2c;
 mod panic_led_halt;
 mod neopixel;
 mod scd41;
-mod usb_writer;
 mod ws2812;
 
 #[allow(unused_imports)]
@@ -57,9 +57,9 @@ mod app {
     use usbd_serial::SerialPort;
 
     use crate::command_processor::CommandProcessor;
+    use crate::console::{debug, init_console, status, USB_TX_SIZE};
     use crate::neopixel;
     use crate::scd41;
-    use crate::usb_writer::{USB_TX_SIZE, UsbWriter};
     use crate::ws2812::Ws2812;
     use crate::i2c as FeatherI2C;
 
@@ -75,7 +75,6 @@ mod app {
     #[shared]
     struct Shared {
         timer: Timer,
-        usb_writer: UsbWriter<'static>,
     }
 
     #[local]
@@ -183,7 +182,7 @@ mod app {
 
         let (usb_rx_p, usb_rx_c) = context.local.usb_rx_q.split();
         let (usb_tx_p, usb_tx_c) = context.local.usb_tx_q.split();
-        let usb_writer = UsbWriter::new(usb_tx_p, &TERM_BYTES);
+        init_console(usb_tx_p, &TERM_BYTES);
 
         // Create the command processor.
 
@@ -203,7 +202,6 @@ mod app {
         (
             Shared {
                 timer,
-                usb_writer,
             },
             Local {
                 alarm0,
@@ -230,28 +228,24 @@ mod app {
             cmd: String<MSG_SIZE> = String::new(),
             neopixel,
             usb_rx_c,
-        ],
-        shared = [usb_writer],
+        ]
     )]
     fn process_commands(context: process_commands::Context) {
         let process_commands::LocalResources { command_processor, cmd, neopixel, usb_rx_c } = context.local;
-        let process_commands::SharedResources { mut usb_writer } = context.shared;
 
-        usb_writer.lock(|u| {
-            loop {
-                match usb_rx_c.dequeue() {
-                    None => { break; }
-                    Some(b) => {
-                        if TERM_BYTES.contains(&b) {
-                            command_processor.process(u, neopixel, cmd);
-                            cmd.clear();
-                        } else {
-                            let _ = cmd.push(b as char);
-                        }
+        loop {
+            match usb_rx_c.dequeue() {
+                None => { break; }
+                Some(b) => {
+                    if TERM_BYTES.contains(&b) {
+                        command_processor.process(neopixel, cmd);
+                        cmd.clear();
+                    } else {
+                        let _ = cmd.push(b as char);
                     }
                 }
             }
-        });
+        }
     }
 
     #[task(
@@ -293,50 +287,42 @@ mod app {
         binds = TIMER_IRQ_1,
         local = [alarm1, firstTime: bool = true, periodicMeasurementStarted: bool = false, i2c],
         priority = 1,
-        shared = [timer, usb_writer],
+        shared = [timer],
     )]
     fn timer_irq_1(context: timer_irq_1::Context) {
         let timer_irq_1::LocalResources { alarm1, firstTime, periodicMeasurementStarted, i2c } = context.local;
-        let timer_irq_1::SharedResources { timer, usb_writer } = context.shared;
+        let timer_irq_1::SharedResources { mut timer } = context.shared;
 
-        (timer, usb_writer).lock(|t, u| {
+        timer.lock(|t| {
             if *firstTime {
-                u.sts("hello");
+                status("hello");
                 *firstTime = false;
             }
 
             if !*periodicMeasurementStarted {
                 match scd41::start_periodic_measurement(i2c) {
                     Ok(_) => {
-                        u.dbg("started periodic measurement");
+                        debug("started periodic measurement");
                         *periodicMeasurementStarted = true;
                     },
-                    Err(_) => u.dbg("failed starting periodic measurement"),
+                    Err(_) => debug("failed starting periodic measurement"),
                 }
                 *periodicMeasurementStarted = true;
             } else {
-                match scd41::get_data_ready_status(i2c, u) {
+                match scd41::get_data_ready_status(i2c) {
                     Ok(_) => {
-                        u.dbg("data is ready");
-                        //match scd41::get_serial_number(i2c, u) {
-                        //    Ok(serial) => {
-                        //        let mut s: String<MSG_SIZE> = String::new();
-                        //        let _ = uwrite!(s, "serial number: {}", serial);
-                        //        u.sinf(s.as_str());
-                        //    },
-                        //    Err(_) => u.serr("failed reading serial number"),
-                        //}
+                        debug("data is ready");
 
-                        match scd41::read_measurement(i2c, u) {
+                        match scd41::read_measurement(i2c) {
                             Ok(meas) => {
                                 let mut s: String<MSG_SIZE> = String::new();
                                 let _ = uwrite!(s, "CO2: {} ppm", meas.co2);
-                                u.dbg(s.as_str());
+                                debug(s.as_str());
                             },
-                            Err(_) => u.dbg("failed reading measurement"),
+                            Err(_) => debug("failed reading measurement"),
                         }
                     },
-                    Err(_) => u.dbg("data not ready"),
+                    Err(_) => debug("data not ready"),
                 }
             }
 

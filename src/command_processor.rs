@@ -3,7 +3,7 @@ use heapless::{String, Vec};
 use smart_leds::{RGB, SmartLedsWrite};
 
 use crate::neopixel::FeatherNeopixel;
-use crate::usb_writer::UsbWriter;
+use crate::console::{ack, error, info};
 
 const MAX_TOKENS: usize = 4;
 
@@ -31,7 +31,6 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
 
     pub fn process(
         &mut self,
-        usb_writer: &mut UsbWriter,
         neopixel: &mut FeatherNeopixel,
         cmd: &String<MSG_SIZE>
     ) {
@@ -42,7 +41,7 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
         }
 
         if tokens[0] == "echo" {
-            usb_writer.inf(self.assemble(&tokens));
+            info(self.assemble(&tokens));
         } else if tokens[0] == "neo" {
             if tokens.len() == 2 {
                 match tokens[1] {
@@ -55,7 +54,7 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
                     "white" => { let _ = neopixel.write(once(RGB::from((16, 16, 16)))); },
                     "yellow" => { let _ = neopixel.write(once(RGB::from((16, 16, 0)))); },
                     _ => {
-                        usb_writer.err("unknown color");
+                        error("unknown color");
                         return;
                     }
                 }
@@ -68,11 +67,11 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
                     let value: RGB<u8> = RGB::new(r, g, b);
                     let _ = neopixel.write(once(value));
                 } else {
-                    usb_writer.err("invalid rgb value");
+                    error("invalid rgb value");
                     return;
                 }
             } else {
-                usb_writer.err("invalid arguments");
+                error("invalid arguments");
                 return;
             }
         } else if tokens[0] == "panic" {
@@ -80,10 +79,10 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
             let i = x.len() + 1;
             let _y = x[i];
         } else {
-            usb_writer.err("unknown command");
+            error("unknown command");
             return;
         }
 
-        usb_writer.ack(tokens[0]);
+        ack(tokens[0]);
     }
 }
