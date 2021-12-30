@@ -19,10 +19,10 @@ mod ws2812;
 use crate::panic_led_halt as _;
 
 // Task Priorities:
-//   * 4 (highest): high-priority tasks
-//   * 3: reading/writing data from/to USB into queues
-//   * 2: process_commands (processing commands received over usb)
-//   * 1 (lowest): low-priority tasks
+//   * 4 (highest): none
+//   * 3: timer_irq_0 (reading/writing data from/to USB into queues)
+//   * 2: process_commands, timer_irq_1 (service sensors)
+//   * 1 (lowest): timer_irq_0 (heartbeat)
 
 #[app(
     device = feather_rp2040::hal::pac,
@@ -30,7 +30,7 @@ use crate::panic_led_halt as _;
     peripherals = true
 )]
 mod app {
-    //use cortex_m::delay::Delay;
+    use cortex_m::delay::Delay;
     use embedded_hal::digital::v2::OutputPin;
     use embedded_time::{duration::*, rate::*};
     use feather_rp2040::{
@@ -59,7 +59,7 @@ mod app {
     use crate::command_processor::CommandProcessor;
     use crate::console::{debug, init_console, status, USB_TX_SIZE};
     use crate::neopixel;
-    use crate::scd41;
+    use crate::scd41::Scd41;
     use crate::ws2812::Ws2812;
     use crate::i2c as FeatherI2C;
 
@@ -83,10 +83,11 @@ mod app {
         alarm0: Alarm0,
         alarm1: Alarm1,
         command_processor: CommandProcessor<MSG_SIZE>,
-        //delay: Delay,
+        delay: Delay,
         i2c: FeatherI2C::FeatherI2C,
         neopixel: neopixel::FeatherNeopixel,
         red_led: Pin<Gpio13, PushPullOutput>,
+        scd41: Scd41,
         usb_device: UsbDevice<'static, HalUsbBus>,
         usb_rx_c: Consumer<'static, u8, USB_RX_SIZE>,
         usb_rx_p: Producer<'static, u8, USB_RX_SIZE>,
@@ -133,7 +134,7 @@ mod app {
 
         // Initialize delay.
 
-        //let delay = Delay::new(context.core.SYST, clocks.system_clock.freq().integer());
+        let delay = Delay::new(context.core.SYST, clocks.system_clock.freq().integer());
 
         // Initialize I2C.
 
@@ -160,6 +161,10 @@ mod app {
         // Initialize red LED.
 
         let red_led = pins.d13.into_push_pull_output();
+
+        // Initialize SCD41.
+
+        let scd41 = Scd41::new();
 
         // Initialize USB.
 
@@ -207,10 +212,11 @@ mod app {
                 alarm0,
                 alarm1,
                 command_processor,
-                //delay,
+                delay,
                 i2c,
                 neopixel,
                 red_led,
+                scd41,
                 usb_device,
                 usb_rx_c,
                 usb_rx_p,
@@ -285,47 +291,41 @@ mod app {
 
     #[task(
         binds = TIMER_IRQ_1,
-        local = [alarm1, firstTime: bool = true, periodicMeasurementStarted: bool = false, i2c],
-        priority = 1,
+        local = [
+            alarm1,
+            delay,
+            firstTime: bool = true,
+            i2c,
+            scd41,
+        ],
+        priority = 2,
         shared = [timer],
     )]
     fn timer_irq_1(context: timer_irq_1::Context) {
-        let timer_irq_1::LocalResources { alarm1, firstTime, periodicMeasurementStarted, i2c } = context.local;
+        let timer_irq_1::LocalResources { alarm1, delay, firstTime, i2c, scd41 } = context.local;
         let timer_irq_1::SharedResources { mut timer } = context.shared;
 
+        if *firstTime {
+            status("hello");
+            match scd41.init(delay, i2c) {
+                Ok(_) => {},
+                Err(_) => debug("scd41: init failed"),
+            }
+            let _ = scd41.init(delay, i2c);
+            status("ready");
+            *firstTime = false;
+        } else {
+            match scd41.read_measurement(delay, i2c) {
+                Ok(meas) => {
+                    let mut s: String<MSG_SIZE> = String::new();
+                    let _ = uwrite!(s, "CO2: {} ppm", meas.co2);
+                    status(s.as_str());
+                },
+                Err(_) => status("scd41: failed reading measurement"),
+            }
+        }
+
         timer.lock(|t| {
-            if *firstTime {
-                status("hello");
-                *firstTime = false;
-            }
-
-            if !*periodicMeasurementStarted {
-                match scd41::start_periodic_measurement(i2c) {
-                    Ok(_) => {
-                        debug("started periodic measurement");
-                        *periodicMeasurementStarted = true;
-                    },
-                    Err(_) => debug("failed starting periodic measurement"),
-                }
-                *periodicMeasurementStarted = true;
-            } else {
-                match scd41::get_data_ready_status(i2c) {
-                    Ok(_) => {
-                        debug("data is ready");
-
-                        match scd41::read_measurement(i2c) {
-                            Ok(meas) => {
-                                let mut s: String<MSG_SIZE> = String::new();
-                                let _ = uwrite!(s, "CO2: {} ppm", meas.co2);
-                                debug(s.as_str());
-                            },
-                            Err(_) => debug("failed reading measurement"),
-                        }
-                    },
-                    Err(_) => debug("data not ready"),
-                }
-            }
-
             alarm1.clear_interrupt(t);
             let _ = alarm1.schedule(ALARM1_TICK);
         });

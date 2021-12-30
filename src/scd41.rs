@@ -1,9 +1,8 @@
+use cortex_m::delay::Delay;
 use embedded_hal::blocking::i2c::{Read, Write};
 use feather_rp2040::hal::i2c;
-use heapless::String;
-use ufmt::uwrite;
 
-use crate::console::debug;
+use crate::console::status;
 use crate::i2c::FeatherI2C;
 
 // Note: maximum speed is 100 kHz.
@@ -13,7 +12,10 @@ const ADDRESS: u8 = 0x62;
 #[non_exhaustive]
 pub enum Error {
     I2CError(i2c::Error),
+    DataNotReady,
+    InvalidBufferSize,
     InvalidChecksum,
+    InvalidState,
 }
 
 impl From<i2c::Error> for Error {
@@ -40,30 +42,11 @@ fn calc_crc(data: &[u8], len: usize) -> u8 {
     return crc;
 }
 
-const MAX_READ_BYTES: usize = 16;
-
 #[allow(dead_code)]
-fn read_data_dbg(i2c: &mut FeatherI2C, cmd: u16, buf: &mut [u16]) -> Result<(), Error> {
-    let mut s: String<64> = String::new();
-    let cmd_bytes: [u8; 2] = [((cmd & 0xff00) >> 8) as u8, (cmd & 0x00ff) as u8];
-    let _ = i2c.write(ADDRESS, &cmd_bytes)?;
-
-    let mut data_bytes: [u8; MAX_READ_BYTES] = [0; MAX_READ_BYTES];
-    let _ = i2c.read(ADDRESS, &mut data_bytes)?;
-
-    for n in 0..buf.len() {
-        let word: &[u8] = &data_bytes[3 * n..];
-        let crc = calc_crc(&word, 2);
-        s.clear();
-        let _ = uwrite!(s, "[{}, {}, {}] -> {}", word[0], word[1], word[2], crc);
-        debug(s.as_str());
-        if crc != word[2] {
-            return Err(Error::InvalidChecksum);
-        }
-        buf[n] = ((word[0] as u16) << 8) | (word[1] as u16);
-    }
-
-    Ok(())
+pub struct Measurement {
+    pub co2: u16, // QU16.0, units ppm
+    pub temp: i16, // Q7.8, units C, range [-10, 60]
+    pub rh: u16, // QU0.16
 }
 
 fn read_data(i2c: &mut FeatherI2C, cmd: u16, buf: &mut [u16]) -> Result<(), Error> {
@@ -79,6 +62,31 @@ fn read_data(i2c: &mut FeatherI2C, cmd: u16, buf: &mut [u16]) -> Result<(), Erro
             return Err(Error::InvalidChecksum);
         }
         buf[n] = ((data_bytes[0] as u16) << 8) | (data_bytes[1] as u16);
+    }
+
+    Ok(())
+}
+
+fn read_data_with_delay(delay: &mut Delay, i2c: &mut FeatherI2C, cmd: u16, delay_ms: u32, buf: &mut [u16]) -> Result<(), Error> {
+    if buf.len() > 3 {
+        return Err(Error::InvalidBufferSize);
+    }
+
+    let cmd_bytes: [u8; 2] = [((cmd & 0xff00) >> 8) as u8, (cmd & 0x00ff) as u8];
+    let _ = i2c.write(ADDRESS, &cmd_bytes)?;
+
+    delay.delay_ms(delay_ms);
+
+    let mut data_bytes: [u8; 9] = [0; 9];
+    let _ = i2c.read(ADDRESS, &mut data_bytes)?;
+
+    for n in 0..buf.len() {
+        let chunk = &data_bytes[3 * n..];
+        let crc = calc_crc(chunk, 2);
+        if crc != chunk[2] {
+            return Err(Error::InvalidChecksum);
+        }
+        buf[n] = ((chunk[0] as u16) << 8) | (chunk[1] as u16);
     }
 
     Ok(())
@@ -108,17 +116,9 @@ pub fn start_periodic_measurement(i2c: &mut FeatherI2C) -> Result<(), Error> {
 }
 
 #[allow(dead_code)]
-pub struct Measurement {
-    pub co2: u16, // QU16.0, units ppm
-    pub temp: i16, // Q7.8, units C, range [-10, 60]
-    pub rh: u16, // QU0.16
-}
-
-#[allow(dead_code)]
-pub fn read_measurement(i2c: &mut FeatherI2C) -> Result<Measurement, Error> {
-    debug("reading measurements");
+pub fn read_measurement(delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<Measurement, Error> {
     let mut buf: [u16; 3] = [0; 3];
-    let _ = read_data_dbg(i2c, 0xec05, &mut buf)?;
+    let _ = read_data_with_delay(delay, i2c, 0xec05, 5, &mut buf)?;
 
     let co2 = buf[0]; // QU0.16
 
@@ -207,9 +207,8 @@ pub fn start_low_power_periodic_measurement(i2c: &mut FeatherI2C) -> Result<(), 
 
 #[allow(dead_code)]
 pub fn get_data_ready_status(i2c: &mut FeatherI2C) -> Result<bool, Error> {
-    debug("reading data ready");
     let mut buf: [u16; 1] = [0; 1];
-    let _ = read_data_dbg(i2c, 0xe4b8, &mut buf)?;
+    let _ = read_data(i2c, 0xe4b8, &mut buf)?;
     Ok(buf[0] & 0x07ff != 0)
 }
 
@@ -221,9 +220,8 @@ pub fn persist_settings(i2c: &mut FeatherI2C) -> Result<(), Error> {
 
 #[allow(dead_code)]
 pub fn get_serial_number(i2c: &mut FeatherI2C) -> Result<u64, Error> {
-    debug("getting serial number");
     let mut buf: [u16; 3] = [0; 3];
-    let _ = read_data_dbg(i2c, 0x3682, &mut buf)?;
+    let _ = read_data(i2c, 0x3682, &mut buf)?;
     Ok(((buf[0] as u64) << 32) | ((buf[1] as u64) << 16) | (buf[2] as u64))
 }
 
@@ -259,3 +257,102 @@ pub fn measure_single_shot_rht_only(i2c: &mut FeatherI2C) -> Result<(), Error> {
     Ok(())
 }
 
+#[derive(PartialEq, Eq)]
+enum State {
+    Idle,
+    PeriodicMeasurement,
+    Start,
+}
+
+#[allow(dead_code)]
+pub struct Scd41 {
+    state: State,
+}
+
+impl Scd41 {
+    pub fn new() -> Scd41 {
+        Self { state: State::Start }
+    }
+
+    fn set_state(&mut self, new_state: State) {
+        if self.state != new_state {
+            self.state = new_state;
+
+            match self.state {
+                State::Idle => status("scd41: state: Idle"),
+                State::PeriodicMeasurement => status("scd41: state: PeriodicMeasurement"),
+                State::Start => status("scd41: state: Start"),
+            }
+        }
+    }
+
+    pub fn init(&mut self, delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<(), Error> {
+        match self.state {
+            State::Start => {
+                status("scd41: initializing");
+                delay.delay_ms(1200);
+                self.set_state(State::Idle);
+                stop_periodic_measurement(i2c)?;
+                delay.delay_ms(500);
+                start_periodic_measurement(i2c)?;
+                self.set_state(State::PeriodicMeasurement);
+                Ok(())
+            },
+            _ => Err(Error::InvalidState),
+        }
+    }
+
+
+    #[allow(dead_code)]
+    pub fn get_data_ready_status(&self, i2c: &mut FeatherI2C) -> Result<bool, Error> {
+        match self.state {
+            State::PeriodicMeasurement => {
+                let mut buf: [u16; 1] = [0; 1];
+                let _ = read_data(i2c, 0xe4b8, &mut buf)?;
+                Ok(buf[0] & 0x07ff != 0)
+            },
+            _ => Err(Error::InvalidState),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn read_measurement(&self, delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<Measurement, Error> {
+        match self.state {
+            State::PeriodicMeasurement => {
+                let status = get_data_ready_status(i2c)?;
+
+                if !status {
+                    return Err(Error::DataNotReady);
+                }
+
+                let meas = read_measurement(delay, i2c)?;
+                Ok(meas)
+            },
+            _ => Err(Error::InvalidState),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn start_periodic_measurement(&mut self, i2c: &mut FeatherI2C) -> Result<(), Error> {
+        match self.state {
+            State::Idle => {
+                start_periodic_measurement(i2c)?;
+                self.set_state(State::PeriodicMeasurement);
+                Ok(())
+            },
+            _ => Err(Error::InvalidState),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn stop_periodic_measurement(&mut self, i2c: &mut FeatherI2C) -> Result<(), Error> {
+        match self.state {
+            State::PeriodicMeasurement => {
+                stop_periodic_measurement(i2c)?;
+                self.set_state(State::Idle);
+                Ok(())
+            },
+            _ => Err(Error::InvalidState),
+        }
+    }
+}

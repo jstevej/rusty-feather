@@ -75,6 +75,7 @@ pub fn ack(msg: &str) {
     });
 }
 
+#[allow(dead_code)]
 pub fn debug(msg: &str) {
     interrupt::free(|_| unsafe {
         match &mut CONSOLE.inner {
