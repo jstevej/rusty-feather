@@ -51,14 +51,12 @@ mod app {
     };
     use heapless::String;
     use heapless::spsc::{Consumer, Producer, Queue};
-    //use ufmt::{derive::uDebug, uwrite};
-    use ufmt::uwrite;
     use usb_device::{class_prelude::*, prelude::*};
     use usbd_serial::SerialPort;
 
     use crate::command_processor::CommandProcessor;
-    use crate::console::{debug, init_console, status, USB_TX_SIZE};
-    use crate::neopixel;
+    use crate::console::{init_console, status, USB_TX_SIZE};
+    use crate::neopixel::{feather_neopixel_init, FeatherNeopixel, Neopixel};
     use crate::scd41::Scd41;
     use crate::ws2812::Ws2812;
     use crate::i2c as FeatherI2C;
@@ -74,7 +72,11 @@ mod app {
 
     #[shared]
     struct Shared {
+        #[lock_free]
+        neopixel: Neopixel,
         timer: Timer,
+        #[lock_free]
+        ws2812: FeatherNeopixel,
     }
 
     #[local]
@@ -85,7 +87,6 @@ mod app {
         command_processor: CommandProcessor<MSG_SIZE>,
         delay: Delay,
         i2c: FeatherI2C::FeatherI2C,
-        neopixel: neopixel::FeatherNeopixel,
         red_led: Pin<Gpio13, PushPullOutput>,
         scd41: Scd41,
         usb_device: UsbDevice<'static, HalUsbBus>,
@@ -151,12 +152,13 @@ mod app {
         // Initialize the neopixel.
 
         let (mut pio0, sm0, _, _, _) = context.device.PIO0.split(&mut resets);
-        let neopixel = neopixel::feather_neopixel_init!(
+        let ws2812 = feather_neopixel_init!(
             pins.neopixel.into_mode(),
             &mut pio0,
             sm0,
             clocks.peripheral_clock.freq()
         );
+        let neopixel = Neopixel::new();
 
         // Initialize red LED.
 
@@ -206,7 +208,9 @@ mod app {
 
         (
             Shared {
+                neopixel,
                 timer,
+                ws2812,
             },
             Local {
                 alarm0,
@@ -214,7 +218,6 @@ mod app {
                 command_processor,
                 delay,
                 i2c,
-                neopixel,
                 red_led,
                 scd41,
                 usb_device,
@@ -228,23 +231,33 @@ mod app {
     }
 
     #[task(
-        priority = 2,
         local = [
             command_processor,
             cmd: String<MSG_SIZE> = String::new(),
-            neopixel,
             usb_rx_c,
-        ]
+        ],
+        priority = 2,
+        shared = [neopixel, ws2812]
     )]
     fn process_commands(context: process_commands::Context) {
-        let process_commands::LocalResources { command_processor, cmd, neopixel, usb_rx_c } = context.local;
+        let process_commands::LocalResources { command_processor, cmd, usb_rx_c } = context.local;
+        let process_commands::SharedResources { neopixel, ws2812 } = context.shared;
 
         loop {
             match usb_rx_c.dequeue() {
                 None => { break; }
                 Some(b) => {
                     if TERM_BYTES.contains(&b) {
-                        command_processor.process(neopixel, cmd);
+                        {
+                        let tokens = command_processor.tokenize(cmd);
+
+                        let result = neopixel.process_command(ws2812, &tokens);
+
+                        if !command_processor.handle_result(&tokens, result) {
+                            command_processor.process(&tokens);
+                        }
+                        }
+
                         cmd.clear();
                     } else {
                         let _ = cmd.push(b as char);
@@ -299,31 +312,19 @@ mod app {
             scd41,
         ],
         priority = 2,
-        shared = [timer],
+        shared = [neopixel, timer, ws2812],
     )]
     fn timer_irq_1(context: timer_irq_1::Context) {
         let timer_irq_1::LocalResources { alarm1, delay, firstTime, i2c, scd41 } = context.local;
-        let timer_irq_1::SharedResources { mut timer } = context.shared;
+        let timer_irq_1::SharedResources { neopixel, mut timer, ws2812 } = context.shared;
 
         if *firstTime {
             status("hello");
-            match scd41.init(delay, i2c) {
-                Ok(_) => {},
-                Err(_) => debug("scd41: init failed"),
-            }
-            let _ = scd41.init(delay, i2c);
-            status("ready");
             *firstTime = false;
-        } else {
-            match scd41.read_measurement(delay, i2c) {
-                Ok(meas) => {
-                    let mut s: String<MSG_SIZE> = String::new();
-                    let _ = uwrite!(s, "CO2: {} ppm", meas.co2);
-                    status(s.as_str());
-                },
-                Err(_) => status("scd41: failed reading measurement"),
-            }
         }
+
+        neopixel.service(ws2812);
+        scd41.service(delay, i2c);
 
         timer.lock(|t| {
             alarm1.clear_interrupt(t);

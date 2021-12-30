@@ -1,6 +1,8 @@
 use cortex_m::delay::Delay;
 use embedded_hal::blocking::i2c::{Read, Write};
 use feather_rp2040::hal::i2c;
+use heapless::String;
+use ufmt::uwrite;
 
 use crate::console::status;
 use crate::i2c::FeatherI2C;
@@ -12,10 +14,8 @@ const ADDRESS: u8 = 0x62;
 #[non_exhaustive]
 pub enum Error {
     I2CError(i2c::Error),
-    DataNotReady,
     InvalidBufferSize,
     InvalidChecksum,
-    InvalidState,
 }
 
 impl From<i2c::Error> for Error {
@@ -109,13 +109,11 @@ fn write_data(i2c: &mut FeatherI2C, cmd: u16, buf: &[u16]) -> Result<(), Error> 
     Ok(())
 }
 
-#[allow(dead_code)]
 pub fn start_periodic_measurement(i2c: &mut FeatherI2C) -> Result<(), Error> {
     let _ = write_data(i2c, 0x21b1, &[])?;
     Ok(())
 }
 
-#[allow(dead_code)]
 pub fn read_measurement(delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<Measurement, Error> {
     let mut buf: [u16; 3] = [0; 3];
     let _ = read_data_with_delay(delay, i2c, 0xec05, 5, &mut buf)?;
@@ -132,7 +130,6 @@ pub fn read_measurement(delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<Measu
     Ok(Measurement { co2, temp, rh })
 }
 
-#[allow(dead_code)]
 pub fn stop_periodic_measurement(i2c: &mut FeatherI2C) -> Result<(), Error> {
     let _ = write_data(i2c, 0x3f86, &[])?;
     Ok(())
@@ -264,14 +261,63 @@ enum State {
     Start,
 }
 
-#[allow(dead_code)]
 pub struct Scd41 {
     state: State,
 }
 
+const MSG_SIZE: usize = 64;
+
 impl Scd41 {
     pub fn new() -> Scd41 {
         Self { state: State::Start }
+    }
+
+    pub fn service(&mut self, delay: &mut Delay, i2c: &mut FeatherI2C) {
+        match self.state {
+            State::Start => {
+                status("scd41: initializing");
+                delay.delay_ms(1200);
+                self.set_state(State::Idle);
+
+                match stop_periodic_measurement(i2c) {
+                    Ok(_) => {},
+                    Err(_) => status("scd41: failed stopping periodic measurement"),
+                }
+                delay.delay_ms(500);
+
+                match start_periodic_measurement(i2c) {
+                    Ok(_) => {
+                        self.set_state(State::PeriodicMeasurement);
+                    },
+                    Err(_) => {
+                        status("scd41: failed starting periodic measurement");
+                    },
+                }
+            },
+            State::PeriodicMeasurement => {
+                match get_data_ready_status(i2c) {
+                    Ok(true) => {
+                        match read_measurement(delay, i2c) {
+                            Ok(meas) => {
+                                let mut s: String<MSG_SIZE> = String::new();
+                                let _ = uwrite!(s, "scd41: CO2: {} ppm", meas.co2);
+                                status(s.as_str());
+                            },
+                            Err(_) => {
+                                status("scd41: failed reading periodic measurement");
+                            },
+                        }
+                    },
+                    Ok(false) => {
+                        status("scd41: data not ready");
+                    },
+                    Err(_) => {
+                        status("scd41: failed getting data ready status");
+                    }
+                }
+            },
+            State::Idle => {},
+        }
     }
 
     fn set_state(&mut self, new_state: State) {
@@ -283,76 +329,6 @@ impl Scd41 {
                 State::PeriodicMeasurement => status("scd41: state: PeriodicMeasurement"),
                 State::Start => status("scd41: state: Start"),
             }
-        }
-    }
-
-    pub fn init(&mut self, delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<(), Error> {
-        match self.state {
-            State::Start => {
-                status("scd41: initializing");
-                delay.delay_ms(1200);
-                self.set_state(State::Idle);
-                stop_periodic_measurement(i2c)?;
-                delay.delay_ms(500);
-                start_periodic_measurement(i2c)?;
-                self.set_state(State::PeriodicMeasurement);
-                Ok(())
-            },
-            _ => Err(Error::InvalidState),
-        }
-    }
-
-
-    #[allow(dead_code)]
-    pub fn get_data_ready_status(&self, i2c: &mut FeatherI2C) -> Result<bool, Error> {
-        match self.state {
-            State::PeriodicMeasurement => {
-                let mut buf: [u16; 1] = [0; 1];
-                let _ = read_data(i2c, 0xe4b8, &mut buf)?;
-                Ok(buf[0] & 0x07ff != 0)
-            },
-            _ => Err(Error::InvalidState),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn read_measurement(&self, delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<Measurement, Error> {
-        match self.state {
-            State::PeriodicMeasurement => {
-                let status = get_data_ready_status(i2c)?;
-
-                if !status {
-                    return Err(Error::DataNotReady);
-                }
-
-                let meas = read_measurement(delay, i2c)?;
-                Ok(meas)
-            },
-            _ => Err(Error::InvalidState),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn start_periodic_measurement(&mut self, i2c: &mut FeatherI2C) -> Result<(), Error> {
-        match self.state {
-            State::Idle => {
-                start_periodic_measurement(i2c)?;
-                self.set_state(State::PeriodicMeasurement);
-                Ok(())
-            },
-            _ => Err(Error::InvalidState),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn stop_periodic_measurement(&mut self, i2c: &mut FeatherI2C) -> Result<(), Error> {
-        match self.state {
-            State::PeriodicMeasurement => {
-                stop_periodic_measurement(i2c)?;
-                self.set_state(State::Idle);
-                Ok(())
-            },
-            _ => Err(Error::InvalidState),
         }
     }
 }
