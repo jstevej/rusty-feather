@@ -56,7 +56,7 @@ mod app {
 
     use crate::console::{init_console, status, USB_TX_SIZE};
     use crate::neopixel::{feather_neopixel_init, FeatherNeopixel, Neopixel};
-    use crate::parser::Parser;
+    use crate::parser::{MSG_SIZE, Parser};
     use crate::scd41::Scd41;
     use crate::ws2812::Ws2812;
     use crate::i2c as FeatherI2C;
@@ -64,7 +64,6 @@ mod app {
     const ALARM1_TICK: Microseconds = Microseconds(5_000_000);
     const HEARTBEAT_FAST: Microseconds = Microseconds(150_000);
     const HEARTBEAT_SLOW: Microseconds = Microseconds(800_000);
-    const MSG_SIZE: usize = 64;
     const TERM_BYTES: [u8; 2] = [b'\r', b'\n'];
     const USB_RX_SIZE: usize = 128;
 
@@ -86,7 +85,7 @@ mod app {
         alarm1: Alarm1,
         delay: Delay,
         i2c: FeatherI2C::FeatherI2C,
-        parser: Parser<MSG_SIZE>,
+        parser: Parser,
         red_led: Pin<Gpio13, PushPullOutput>,
         scd41: Scd41,
         usb_device: UsbDevice<'static, HalUsbBus>,
@@ -193,7 +192,7 @@ mod app {
 
         // Create the command parser.
 
-        let parser: Parser<MSG_SIZE> = Parser::new();
+        let parser: Parser = Parser::new();
 
         // Enable interrupts.
 

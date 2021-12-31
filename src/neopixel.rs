@@ -8,13 +8,11 @@ use heapless::{String, Vec};
 use smart_leds::{RGB, SmartLedsWrite};
 use ufmt::uwrite;
 
-use crate::console::{info, status};
-use crate::parser::{CommandResult, MAX_TOKENS};
+use crate::console::status;
+use crate::parser::{CommandResult, MAX_TOKENS, MSG_SIZE};
 use crate::ws2812::Ws2812;
 
 pub type FeatherNeopixel = Ws2812<PIO0, SM0, Gpio16>;
-
-const MSG_SIZE: usize = 64;
 
 #[macro_export]
 macro_rules! feather_neopixel_init {
@@ -45,7 +43,7 @@ impl Neopixel {
         if tokens.len() == 2 && tokens[1] == "get" {
             let mut s: String<MSG_SIZE> = String::new();
             let _ = uwrite!(s, "neo: value: {} {} {}", self.value.r, self.value.g, self.value.b);
-            info(s.as_str());
+            return CommandResult::Info(s);
         } else if tokens.len() == 2 {
             match tokens[1] {
                 "blue" => { self.value.r = 0; self.value.g = 0; self.value.b = 16; },

@@ -3,21 +3,23 @@ use heapless::{String, Vec};
 use crate::console::{ack, error, info};
 
 pub const MAX_TOKENS: usize = 4;
+pub const MSG_SIZE: usize = 64;
 
 #[derive(PartialEq, Eq)]
-pub enum CommandResult {
-    Error(&'static str),
+pub enum CommandResult<'a> {
+    Error(&'a str),
     Handled,
+    Info(String<MSG_SIZE>),
     InvalidArguments,
     NotHandled,
 }
 
-pub struct Parser<const MSG_SIZE: usize> {
+pub struct Parser {
     resp: String<MSG_SIZE>,
 }
 
-impl<const MSG_SIZE: usize> Parser<MSG_SIZE> {
-    pub fn new() -> Parser<MSG_SIZE> {
+impl Parser {
+    pub fn new() -> Parser {
         let resp: String<MSG_SIZE> = String::new();
         Self { resp }
     }
@@ -46,6 +48,12 @@ impl<const MSG_SIZE: usize> Parser<MSG_SIZE> {
             },
             CommandResult::Handled => {
                 ack(tokens[0]);
+            },
+            CommandResult::Info(msg) => {
+                let _ = self.resp.push_str(tokens[0]);
+                let _ = self.resp.push_str(": ");
+                let _ = self.resp.push_str(msg.as_str());
+                info(self.resp.as_str());
             },
             CommandResult::InvalidArguments => {
                 let _ = self.resp.push_str(tokens[0]);
