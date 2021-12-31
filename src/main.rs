@@ -7,10 +7,10 @@ use rtic::app;
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GD25Q64CS;
 
-mod command_processor;
 mod console;
 mod i2c;
 mod panic_led_halt;
+mod parser;
 mod neopixel;
 mod scd41;
 mod ws2812;
@@ -54,9 +54,9 @@ mod app {
     use usb_device::{class_prelude::*, prelude::*};
     use usbd_serial::SerialPort;
 
-    use crate::command_processor::CommandProcessor;
     use crate::console::{init_console, status, USB_TX_SIZE};
     use crate::neopixel::{feather_neopixel_init, FeatherNeopixel, Neopixel};
+    use crate::parser::Parser;
     use crate::scd41::Scd41;
     use crate::ws2812::Ws2812;
     use crate::i2c as FeatherI2C;
@@ -84,9 +84,9 @@ mod app {
     {
         alarm0: Alarm0,
         alarm1: Alarm1,
-        command_processor: CommandProcessor<MSG_SIZE>,
         delay: Delay,
         i2c: FeatherI2C::FeatherI2C,
+        parser: Parser<MSG_SIZE>,
         red_led: Pin<Gpio13, PushPullOutput>,
         scd41: Scd41,
         usb_device: UsbDevice<'static, HalUsbBus>,
@@ -191,9 +191,9 @@ mod app {
         let (usb_tx_p, usb_tx_c) = context.local.usb_tx_q.split();
         init_console(usb_tx_p, &TERM_BYTES);
 
-        // Create the command processor.
+        // Create the command parser.
 
-        let command_processor: CommandProcessor<MSG_SIZE> = CommandProcessor::new();
+        let parser: Parser<MSG_SIZE> = Parser::new();
 
         // Enable interrupts.
 
@@ -215,9 +215,9 @@ mod app {
             Local {
                 alarm0,
                 alarm1,
-                command_processor,
                 delay,
                 i2c,
+                parser,
                 red_led,
                 scd41,
                 usb_device,
@@ -232,15 +232,15 @@ mod app {
 
     #[task(
         local = [
-            command_processor,
             cmd: String<MSG_SIZE> = String::new(),
+            parser,
             usb_rx_c,
         ],
         priority = 2,
         shared = [neopixel, ws2812]
     )]
     fn process_commands(context: process_commands::Context) {
-        let process_commands::LocalResources { command_processor, cmd, usb_rx_c } = context.local;
+        let process_commands::LocalResources { cmd, parser, usb_rx_c } = context.local;
         let process_commands::SharedResources { neopixel, ws2812 } = context.shared;
 
         loop {
@@ -248,11 +248,9 @@ mod app {
                 None => { break; }
                 Some(b) => {
                     if TERM_BYTES.contains(&b) {
-                        if let Some(tokens) = command_processor.tokenize(cmd) {
-                            if !command_processor.handle_result(
-                                &tokens, neopixel.process(ws2812, &tokens)
-                            ) {
-                                command_processor.process(&tokens);
+                        if let Some(tokens) = parser.tokenize(cmd) {
+                            if !parser.handle_result(&tokens, neopixel.process(ws2812, &tokens)) {
+                                parser.process(&tokens);
                             }
                         }
 

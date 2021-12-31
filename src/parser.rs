@@ -12,12 +12,12 @@ pub enum CommandResult {
     NotHandled,
 }
 
-pub struct CommandProcessor<const MSG_SIZE: usize> {
+pub struct Parser<const MSG_SIZE: usize> {
     resp: String<MSG_SIZE>,
 }
 
-impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
-    pub fn new() -> CommandProcessor<MSG_SIZE> {
+impl<const MSG_SIZE: usize> Parser<MSG_SIZE> {
+    pub fn new() -> Parser<MSG_SIZE> {
         let resp: String<MSG_SIZE> = String::new();
         Self { resp }
     }

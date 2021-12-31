@@ -8,8 +8,8 @@ use heapless::{String, Vec};
 use smart_leds::{RGB, SmartLedsWrite};
 use ufmt::uwrite;
 
-use crate::command_processor::{CommandResult, MAX_TOKENS};
 use crate::console::{info, status};
+use crate::parser::{CommandResult, MAX_TOKENS};
 use crate::ws2812::Ws2812;
 
 pub type FeatherNeopixel = Ws2812<PIO0, SM0, Gpio16>;
