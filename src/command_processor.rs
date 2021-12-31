@@ -64,21 +64,23 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
         &mut self,
         tokens: &Vec<&str, MAX_TOKENS>
     ) {
-        if tokens[0] == "echo" {
-            info(self.assemble(&tokens));
-        } else if tokens[0] == "panic" {
-            let x = [0, 1, 2];
-            let i = x.len() + 1;
-            let _y = x[i];
-        } else {
-            self.resp.clear();
-            let _ = self.resp.push_str(tokens[0]);
-            let _ = self.resp.push_str(": unknown command");
-            error(self.resp.as_str());
-            return;
-        }
+        if tokens.len() > 0 {
+            if tokens[0] == "echo" {
+                info(self.assemble(&tokens));
+            } else if tokens[0] == "panic" {
+                let x = [0, 1, 2];
+                let i = x.len() + 1;
+                let _y = x[i];
+            } else {
+                self.resp.clear();
+                let _ = self.resp.push_str(tokens[0]);
+                let _ = self.resp.push_str(": unknown command");
+                error(self.resp.as_str());
+                return;
+            }
 
-        ack(tokens[0]);
+            ack(tokens[0]);
+        }
     }
 
     pub fn tokenize<'a>(&self, cmd: &'a String<MSG_SIZE>) -> Vec<&'a str, MAX_TOKENS> {
