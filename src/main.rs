@@ -248,14 +248,12 @@ mod app {
                 None => { break; }
                 Some(b) => {
                     if TERM_BYTES.contains(&b) {
-                        {
-                        let tokens = command_processor.tokenize(cmd);
-
-                        let result = neopixel.process_command(ws2812, &tokens);
-
-                        if !command_processor.handle_result(&tokens, result) {
-                            command_processor.process(&tokens);
-                        }
+                        if let Some(tokens) = command_processor.tokenize(cmd) {
+                            if !command_processor.handle_result(
+                                &tokens, neopixel.process(ws2812, &tokens)
+                            ) {
+                                command_processor.process(&tokens);
+                            }
                         }
 
                         cmd.clear();

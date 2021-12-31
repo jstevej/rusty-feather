@@ -37,7 +37,7 @@ impl Neopixel {
         Self { state: State::Start, value: RGB::new(0, 0, 0) }
     }
 
-    pub fn process_command(&mut self, ws2812: &mut FeatherNeopixel, tokens: &Vec<&str, MAX_TOKENS>) -> CommandResult {
+    pub fn process(&mut self, ws2812: &mut FeatherNeopixel, tokens: &Vec<&str, MAX_TOKENS>) -> CommandResult {
         if tokens.len() <= 0 || tokens[0] != "neo" {
             return CommandResult::NotHandled;
         }

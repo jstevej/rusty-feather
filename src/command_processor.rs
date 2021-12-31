@@ -83,13 +83,17 @@ impl<const MSG_SIZE: usize> CommandProcessor<MSG_SIZE> {
         }
     }
 
-    pub fn tokenize<'a>(&self, cmd: &'a String<MSG_SIZE>) -> Vec<&'a str, MAX_TOKENS> {
+    pub fn tokenize<'a>(&self, cmd: &'a String<MSG_SIZE>) -> Option<Vec<&'a str, MAX_TOKENS>> {
         let mut tokens: Vec<&str, MAX_TOKENS> = Vec::new();
 
         for token in cmd.split_ascii_whitespace() {
             let _ = tokens.push(token);
         }
 
-        tokens
+        if tokens.len() <= 0 {
+            return None;
+        }
+
+        Some(tokens)
     }
 }
