@@ -72,6 +72,8 @@ mod app {
     #[shared]
     struct Shared {
         #[lock_free]
+        delay: Delay,
+        #[lock_free]
         i2c: FeatherI2C::FeatherI2C,
         #[lock_free]
         neopixel: Neopixel,
@@ -87,7 +89,6 @@ mod app {
     {
         alarm0: Alarm0,
         alarm1: Alarm1,
-        delay: Delay,
         parser: Parser,
         red_led: Pin<Gpio13, PushPullOutput>,
         usb_device: UsbDevice<'static, HalUsbBus>,
@@ -208,6 +209,7 @@ mod app {
 
         (
             Shared {
+                delay,
                 i2c,
                 neopixel,
                 scd41,
@@ -217,7 +219,6 @@ mod app {
             Local {
                 alarm0,
                 alarm1,
-                delay,
                 parser,
                 red_led,
                 usb_device,
@@ -237,11 +238,11 @@ mod app {
             usb_rx_c,
         ],
         priority = 2,
-        shared = [i2c, neopixel, scd41, ws2812]
+        shared = [delay, i2c, neopixel, scd41, ws2812]
     )]
     fn process_commands(context: process_commands::Context) {
         let process_commands::LocalResources { cmd, parser, usb_rx_c } = context.local;
-        let process_commands::SharedResources { i2c, neopixel, scd41, ws2812 } = context.shared;
+        let process_commands::SharedResources { delay, i2c, neopixel, scd41, ws2812 } = context.shared;
 
         loop {
             match usb_rx_c.dequeue() {
@@ -249,7 +250,7 @@ mod app {
                 Some(b) => {
                     if TERM_BYTES.contains(&b) {
                         if let Some(tokens) = parser.tokenize(cmd) {
-                            let _ = parser.handle_result(&tokens, scd41.process(i2c, &tokens)) ||
+                            let _ = parser.handle_result(&tokens, scd41.process(delay, i2c, &tokens)) ||
                                 parser.handle_result(&tokens, neopixel.process(ws2812, &tokens)) ||
                                 parser.process(&tokens);
                         }
@@ -295,13 +296,13 @@ mod app {
 
     #[task(
         binds = TIMER_IRQ_1,
-        local = [alarm1, delay, firstTime: bool = true],
+        local = [alarm1, firstTime: bool = true],
         priority = 2,
-        shared = [i2c, neopixel, scd41, timer, ws2812],
+        shared = [delay, i2c, neopixel, scd41, timer, ws2812],
     )]
     fn timer_irq_1(context: timer_irq_1::Context) {
-        let timer_irq_1::LocalResources { alarm1, delay, firstTime } = context.local;
-        let timer_irq_1::SharedResources { i2c, neopixel, scd41, mut timer, ws2812 } = context.shared;
+        let timer_irq_1::LocalResources { alarm1, firstTime } = context.local;
+        let timer_irq_1::SharedResources { delay, i2c, neopixel, scd41, mut timer, ws2812 } = context.shared;
 
         if *firstTime {
             status("hello");

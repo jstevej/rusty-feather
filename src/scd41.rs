@@ -1,6 +1,6 @@
 use cortex_m::delay::Delay;
 use embedded_hal::blocking::i2c::{Read, Write};
-use feather_rp2040::hal::i2c;
+use feather_rp2040::hal::{i2c, rom_data::float_funcs};
 use heapless::{String, Vec};
 use ufmt::uwrite;
 
@@ -123,7 +123,7 @@ pub fn read_measurement(delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<Measu
 
     // temp = 175 * temp_raw - 45
     let temp_raw: i16 = buf[1] as i16; // Q0.15
-    let temp32: i32 = (175 << 7) * (temp_raw as i32) + (-45 << 23);
+    let temp32: i32 = (175 << 8) * i32::from(temp_raw) + (-45 << 24);
     let temp: i16 = (temp32 >> 16) as i16;
 
     let rh: u16 = buf[2]; // QU0.16
@@ -225,9 +225,9 @@ pub fn get_serial_number(i2c: &mut FeatherI2C) -> Result<u64, Error> {
 
 // result is true if successful, false if malfunction
 #[allow(dead_code)]
-pub fn perform_self_test(i2c: &mut FeatherI2C) -> Result<bool, Error> {
+pub fn perform_self_test(delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<bool, Error> {
     let mut buf: [u16; 1] = [0; 1];
-    let _ = read_data(i2c, 0x3639, &mut buf)?;
+    let _ = read_data_with_delay(delay, i2c, 0x3639, 10000, &mut buf)?;
     Ok(buf[0] == 0)
 }
 
@@ -259,6 +259,7 @@ pub fn measure_single_shot_rht_only(i2c: &mut FeatherI2C) -> Result<(), Error> {
 enum State {
     Idle,
     PeriodicMeasurement,
+    SelfTest,
     Start,
 }
 
@@ -271,7 +272,7 @@ impl Scd41 {
         Self { state: State::Start }
     }
 
-    pub fn process(&mut self, i2c: &mut FeatherI2C, tokens: &Vec<&str, MAX_TOKENS>) -> CommandResult {
+    pub fn process(&mut self, delay: &mut Delay, i2c: &mut FeatherI2C, tokens: &Vec<&str, MAX_TOKENS>) -> CommandResult {
         if tokens.len() <= 0 || tokens[0] != "scd41" {
             return CommandResult::NotHandled;
         }
@@ -280,6 +281,7 @@ impl Scd41 {
             match self.state {
                 State::Idle => CommandResult::Info(String::from("Idle")),
                 State::PeriodicMeasurement => CommandResult::Info(String::from("PeriodicMeasurement")),
+                State::SelfTest => CommandResult::Info(String::from("SelfTest")),
                 State::Start => CommandResult::Info(String::from("Start")),
             }
         } else if tokens.len() == 2 && tokens[1] == "start" {
@@ -287,7 +289,7 @@ impl Scd41 {
                 State::Idle => {
                     match start_periodic_measurement(i2c) {
                         Ok(_) => {
-                            self.state = State::PeriodicMeasurement;
+                            self.set_state(State::PeriodicMeasurement);
                             CommandResult::Handled
                         },
                         Err(_) => CommandResult::Error("failed starting periodic measurement"),
@@ -300,13 +302,29 @@ impl Scd41 {
                 State::PeriodicMeasurement => {
                     match stop_periodic_measurement(i2c) {
                         Ok(_) => {
-                            self.state = State::Idle;
+                            self.set_state(State::Idle);
                             CommandResult::Handled
                         },
                         Err(_) => CommandResult::Error("failed stoping periodic measurement"),
                     }
                 },
                 _ => CommandResult::Error("invalid state")
+            }
+        } else if tokens.len() == 2 && tokens[1] == "test" {
+            match self.state {
+                State::Idle => {
+                    self.set_state(State::SelfTest);
+
+                    let result = match perform_self_test(delay, i2c) {
+                        Ok(true) => CommandResult::Info(String::from("self test passed")),
+                        Ok(false) => CommandResult::Info(String::from("self test failed")),
+                        Err(_) => CommandResult::Error("failed performing self test"),
+                    };
+
+                    self.set_state(State::Idle);
+                    result
+                },
+                _ => CommandResult::Error("invalid state"),
             }
         } else {
             return CommandResult::Error("invalid arguments");
@@ -341,7 +359,15 @@ impl Scd41 {
                         match read_measurement(delay, i2c) {
                             Ok(meas) => {
                                 let mut s: String<MSG_SIZE> = String::new();
-                                let _ = uwrite!(s, "scd41: CO2: {} ppm", meas.co2);
+                                let fadd = float_funcs::fadd();
+                                let fix_to_float = float_funcs::fix_to_float();
+                                let float_to_int = float_funcs::float_to_int();
+                                let ufix_to_float = float_funcs::ufix_to_float();
+                                let temp_10_f = fix_to_float(10 * i32::from(meas.temp), 8);
+                                let temp_10 = float_to_int(fadd(temp_10_f, 0.5));
+                                let rh_1000_f = ufix_to_float(1000 * u32::from(meas.rh), 16);
+                                let rh_1000 = float_to_int(fadd(rh_1000_f, 0.5));
+                                let _ = uwrite!(s, "scd41: co2: {}, rh: {}, temp: {}", meas.co2, rh_1000, temp_10);
                                 status(s.as_str());
                             },
                             Err(_) => {
@@ -357,7 +383,7 @@ impl Scd41 {
                     }
                 }
             },
-            State::Idle => {},
+            _ => {},
         }
     }
 
@@ -368,6 +394,7 @@ impl Scd41 {
             match self.state {
                 State::Idle => status("scd41: state: Idle"),
                 State::PeriodicMeasurement => status("scd41: state: PeriodicMeasurement"),
+                State::SelfTest => status("scd41: state: SelfTest"),
                 State::Start => status("scd41: state: Start"),
             }
         }
