@@ -71,7 +71,7 @@ impl Parser {
     pub fn process(
         &mut self,
         tokens: &Vec<&str, MAX_TOKENS>
-    ) {
+    ) -> bool {
         if tokens.len() > 0 {
             if tokens[0] == "echo" {
                 info(self.assemble(&tokens));
@@ -84,11 +84,13 @@ impl Parser {
                 let _ = self.resp.push_str(tokens[0]);
                 let _ = self.resp.push_str(": unknown command");
                 error(self.resp.as_str());
-                return;
+                return false;
             }
 
             ack(tokens[0]);
         }
+
+        return true;
     }
 
     pub fn tokenize<'a>(&self, cmd: &'a String<MSG_SIZE>) -> Option<Vec<&'a str, MAX_TOKENS>> {

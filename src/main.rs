@@ -72,7 +72,11 @@ mod app {
     #[shared]
     struct Shared {
         #[lock_free]
+        i2c: FeatherI2C::FeatherI2C,
+        #[lock_free]
         neopixel: Neopixel,
+        #[lock_free]
+        scd41: Scd41,
         timer: Timer,
         #[lock_free]
         ws2812: FeatherNeopixel,
@@ -84,10 +88,8 @@ mod app {
         alarm0: Alarm0,
         alarm1: Alarm1,
         delay: Delay,
-        i2c: FeatherI2C::FeatherI2C,
         parser: Parser,
         red_led: Pin<Gpio13, PushPullOutput>,
-        scd41: Scd41,
         usb_device: UsbDevice<'static, HalUsbBus>,
         usb_rx_c: Consumer<'static, u8, USB_RX_SIZE>,
         usb_rx_p: Producer<'static, u8, USB_RX_SIZE>,
@@ -139,7 +141,6 @@ mod app {
         // Initialize I2C.
 
         let i2c = FeatherI2C::feather_i2c_init!(
-        //let i2c = I2C::i2c1(
             context.device.I2C1,
             pins.sda.into_mode(),
             pins.scl.into_mode(),
@@ -207,7 +208,9 @@ mod app {
 
         (
             Shared {
+                i2c,
                 neopixel,
+                scd41,
                 timer,
                 ws2812,
             },
@@ -215,10 +218,8 @@ mod app {
                 alarm0,
                 alarm1,
                 delay,
-                i2c,
                 parser,
                 red_led,
-                scd41,
                 usb_device,
                 usb_rx_c,
                 usb_rx_p,
@@ -236,11 +237,11 @@ mod app {
             usb_rx_c,
         ],
         priority = 2,
-        shared = [neopixel, ws2812]
+        shared = [i2c, neopixel, scd41, ws2812]
     )]
     fn process_commands(context: process_commands::Context) {
         let process_commands::LocalResources { cmd, parser, usb_rx_c } = context.local;
-        let process_commands::SharedResources { neopixel, ws2812 } = context.shared;
+        let process_commands::SharedResources { i2c, neopixel, scd41, ws2812 } = context.shared;
 
         loop {
             match usb_rx_c.dequeue() {
@@ -248,9 +249,9 @@ mod app {
                 Some(b) => {
                     if TERM_BYTES.contains(&b) {
                         if let Some(tokens) = parser.tokenize(cmd) {
-                            if !parser.handle_result(&tokens, neopixel.process(ws2812, &tokens)) {
+                            let _ = parser.handle_result(&tokens, scd41.process(i2c, &tokens)) ||
+                                parser.handle_result(&tokens, neopixel.process(ws2812, &tokens)) ||
                                 parser.process(&tokens);
-                            }
                         }
 
                         cmd.clear();
@@ -264,12 +265,7 @@ mod app {
 
     #[task(
         binds = TIMER_IRQ_0,
-        local = [
-            alarm0,
-            count: u32 = 0,
-            led_state: bool = true,
-            red_led,
-        ],
+        local = [alarm0, count: u32 = 0, led_state: bool = true, red_led],
         priority = 1,
         shared = [timer],
     )]
@@ -299,19 +295,13 @@ mod app {
 
     #[task(
         binds = TIMER_IRQ_1,
-        local = [
-            alarm1,
-            delay,
-            firstTime: bool = true,
-            i2c,
-            scd41,
-        ],
+        local = [alarm1, delay, firstTime: bool = true],
         priority = 2,
-        shared = [neopixel, timer, ws2812],
+        shared = [i2c, neopixel, scd41, timer, ws2812],
     )]
     fn timer_irq_1(context: timer_irq_1::Context) {
-        let timer_irq_1::LocalResources { alarm1, delay, firstTime, i2c, scd41 } = context.local;
-        let timer_irq_1::SharedResources { neopixel, mut timer, ws2812 } = context.shared;
+        let timer_irq_1::LocalResources { alarm1, delay, firstTime } = context.local;
+        let timer_irq_1::SharedResources { i2c, neopixel, scd41, mut timer, ws2812 } = context.shared;
 
         if *firstTime {
             status("hello");

@@ -1,11 +1,12 @@
 use cortex_m::delay::Delay;
 use embedded_hal::blocking::i2c::{Read, Write};
 use feather_rp2040::hal::i2c;
-use heapless::String;
+use heapless::{String, Vec};
 use ufmt::uwrite;
 
 use crate::console::status;
 use crate::i2c::FeatherI2C;
+use crate::parser::{CommandResult, MAX_TOKENS, MSG_SIZE};
 
 // Note: maximum speed is 100 kHz.
 
@@ -265,11 +266,51 @@ pub struct Scd41 {
     state: State,
 }
 
-const MSG_SIZE: usize = 64;
-
 impl Scd41 {
     pub fn new() -> Scd41 {
         Self { state: State::Start }
+    }
+
+    pub fn process(&mut self, i2c: &mut FeatherI2C, tokens: &Vec<&str, MAX_TOKENS>) -> CommandResult {
+        if tokens.len() <= 0 || tokens[0] != "scd41" {
+            return CommandResult::NotHandled;
+        }
+
+        if tokens.len() == 2 && tokens[1] == "getstate" {
+            match self.state {
+                State::Idle => CommandResult::Info(String::from("Idle")),
+                State::PeriodicMeasurement => CommandResult::Info(String::from("PeriodicMeasurement")),
+                State::Start => CommandResult::Info(String::from("Start")),
+            }
+        } else if tokens.len() == 2 && tokens[1] == "start" {
+            match self.state {
+                State::Idle => {
+                    match start_periodic_measurement(i2c) {
+                        Ok(_) => {
+                            self.state = State::PeriodicMeasurement;
+                            CommandResult::Handled
+                        },
+                        Err(_) => CommandResult::Error("failed starting periodic measurement"),
+                    }
+                },
+                _ => CommandResult::Error("invalid state")
+            }
+        } else if tokens.len() == 2 && tokens[1] == "stop" {
+            match self.state {
+                State::PeriodicMeasurement => {
+                    match stop_periodic_measurement(i2c) {
+                        Ok(_) => {
+                            self.state = State::Idle;
+                            CommandResult::Handled
+                        },
+                        Err(_) => CommandResult::Error("failed stoping periodic measurement"),
+                    }
+                },
+                _ => CommandResult::Error("invalid state")
+            }
+        } else {
+            return CommandResult::Error("invalid arguments");
+        }
     }
 
     pub fn service(&mut self, delay: &mut Delay, i2c: &mut FeatherI2C) {
