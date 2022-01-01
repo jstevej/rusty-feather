@@ -9,7 +9,7 @@ pub const MSG_SIZE: usize = 64;
 pub enum CommandResult<'a> {
     Error(&'a str),
     Handled,
-    Info(String<MSG_SIZE>),
+    Result(String<MSG_SIZE>),
     InvalidArguments,
     NotHandled,
 }
@@ -37,10 +37,10 @@ impl Parser {
     }
 
     pub fn handle_result(&mut self, tokens: &Vec<&str, MAX_TOKENS>, result: CommandResult) -> bool {
-        self.resp.clear();
 
         match result {
             CommandResult::Error(msg) => {
+                self.resp.clear();
                 let _ = self.resp.push_str(tokens[0]);
                 let _ = self.resp.push_str(": ");
                 let _ = self.resp.push_str(msg);
@@ -49,13 +49,15 @@ impl Parser {
             CommandResult::Handled => {
                 ack(tokens[0]);
             },
-            CommandResult::Info(msg) => {
+            CommandResult::Result(msg) => {
+                self.resp.clear();
                 let _ = self.resp.push_str(tokens[0]);
                 let _ = self.resp.push_str(": ");
                 let _ = self.resp.push_str(msg.as_str());
                 info(self.resp.as_str());
             },
             CommandResult::InvalidArguments => {
+                self.resp.clear();
                 let _ = self.resp.push_str(tokens[0]);
                 let _ = self.resp.push_str(": invalid arguments");
                 error(self.resp.as_str());

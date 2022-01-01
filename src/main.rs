@@ -8,6 +8,7 @@ use rtic::app;
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GD25Q64CS;
 
 mod console;
+mod fmt_fix;
 mod i2c;
 mod panic_led_halt;
 mod parser;

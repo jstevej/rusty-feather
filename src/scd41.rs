@@ -1,10 +1,11 @@
 use cortex_m::delay::Delay;
 use embedded_hal::blocking::i2c::{Read, Write};
-use feather_rp2040::hal::{i2c, rom_data::float_funcs};
+use feather_rp2040::hal::i2c;
 use heapless::{String, Vec};
 use ufmt::uwrite;
 
 use crate::console::status;
+use crate::fmt_fix::{FixI16, FixU32};
 use crate::i2c::FeatherI2C;
 use crate::parser::{CommandResult, MAX_TOKENS, MSG_SIZE};
 
@@ -131,8 +132,9 @@ pub fn read_measurement(delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<Measu
     Ok(Measurement { co2, temp, rh })
 }
 
-pub fn stop_periodic_measurement(i2c: &mut FeatherI2C) -> Result<(), Error> {
+pub fn stop_periodic_measurement(delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<(), Error> {
     let _ = write_data(i2c, 0x3f86, &[])?;
+    delay.delay_ms(500);
     Ok(())
 }
 
@@ -143,12 +145,15 @@ pub fn set_temperature_offset(i2c: &mut FeatherI2C, offset: i16) -> Result<(), E
     Ok(())
 }
 
-// Toffset (C) = 175 * offset / 2^16
-#[allow(dead_code)]
-pub fn get_temperature_offset(i2c: &mut FeatherI2C) -> Result<i16, Error> {
+// result in degrees C
+pub fn get_temperature_offset(delay: &mut Delay, i2c: &mut FeatherI2C) -> Result<i16, Error> {
     let mut buf: [u16; 1] = [0; 1];
-    let _ = read_data(i2c, 0x2318, &mut buf)?;
-    Ok(buf[0] as i16)
+    let _ = read_data_with_delay(delay, i2c, 0x2318, 1, &mut buf)?;
+    // temp = 175 * temp_raw
+    let temp_raw: i16 = buf[0] as i16; // Q0.15
+    let temp32: i32 = (175 << 8) * i32::from(temp_raw);
+    let temp: i16 = (temp32 >> 16) as i16;
+    Ok(temp)
 }
 
 // altitude in meters
@@ -277,12 +282,26 @@ impl Scd41 {
             return CommandResult::NotHandled;
         }
 
-        if tokens.len() == 2 && tokens[1] == "getstate" {
+        if tokens.len() == 3 && tokens[1] == "get" && tokens[2] == "state" {
             match self.state {
-                State::Idle => CommandResult::Info(String::from("Idle")),
-                State::PeriodicMeasurement => CommandResult::Info(String::from("PeriodicMeasurement")),
-                State::SelfTest => CommandResult::Info(String::from("SelfTest")),
-                State::Start => CommandResult::Info(String::from("Start")),
+                State::Idle => CommandResult::Result(String::from("Idle")),
+                State::PeriodicMeasurement => CommandResult::Result(String::from("PeriodicMeasurement")),
+                State::SelfTest => CommandResult::Result(String::from("SelfTest")),
+                State::Start => CommandResult::Result(String::from("Start")),
+            }
+        } else if tokens.len() == 3 && tokens[1] == "get" && tokens[2] == "temperature_offset" {
+            match self.state {
+                State::Idle => {
+                    match get_temperature_offset(delay, i2c) {
+                        Ok(temp) => {
+                            let mut s: String<MSG_SIZE> = String::new();
+                            let _ = uwrite!(s, "{}", FixI16::new(temp, 8, 1));
+                            CommandResult::Result(s)
+                        },
+                        Err(_) => CommandResult::Error("failed getting temperature offset"),
+                    }
+                },
+                _ => CommandResult::Error("invalid state"),
             }
         } else if tokens.len() == 2 && tokens[1] == "start" {
             match self.state {
@@ -300,7 +319,7 @@ impl Scd41 {
         } else if tokens.len() == 2 && tokens[1] == "stop" {
             match self.state {
                 State::PeriodicMeasurement => {
-                    match stop_periodic_measurement(i2c) {
+                    match stop_periodic_measurement(delay, i2c) {
                         Ok(_) => {
                             self.set_state(State::Idle);
                             CommandResult::Handled
@@ -316,8 +335,8 @@ impl Scd41 {
                     self.set_state(State::SelfTest);
 
                     let result = match perform_self_test(delay, i2c) {
-                        Ok(true) => CommandResult::Info(String::from("self test passed")),
-                        Ok(false) => CommandResult::Info(String::from("self test failed")),
+                        Ok(true) => CommandResult::Result(String::from("self test passed")),
+                        Ok(false) => CommandResult::Result(String::from("self test failed")),
                         Err(_) => CommandResult::Error("failed performing self test"),
                     };
 
@@ -338,11 +357,10 @@ impl Scd41 {
                 delay.delay_ms(1200);
                 self.set_state(State::Idle);
 
-                match stop_periodic_measurement(i2c) {
+                match stop_periodic_measurement(delay, i2c) {
                     Ok(_) => {},
                     Err(_) => status("scd41: failed stopping periodic measurement"),
                 }
-                delay.delay_ms(500);
 
                 match start_periodic_measurement(i2c) {
                     Ok(_) => {
@@ -359,15 +377,7 @@ impl Scd41 {
                         match read_measurement(delay, i2c) {
                             Ok(meas) => {
                                 let mut s: String<MSG_SIZE> = String::new();
-                                let fadd = float_funcs::fadd();
-                                let fix_to_float = float_funcs::fix_to_float();
-                                let float_to_int = float_funcs::float_to_int();
-                                let ufix_to_float = float_funcs::ufix_to_float();
-                                let temp_10_f = fix_to_float(10 * i32::from(meas.temp), 8);
-                                let temp_10 = float_to_int(fadd(temp_10_f, 0.5));
-                                let rh_1000_f = ufix_to_float(1000 * u32::from(meas.rh), 16);
-                                let rh_1000 = float_to_int(fadd(rh_1000_f, 0.5));
-                                let _ = uwrite!(s, "scd41: co2: {}, rh: {}, temp: {}", meas.co2, rh_1000, temp_10);
+                                let _ = uwrite!(s, "scd41: co2: {}, rh: {}, temp: {}", meas.co2, FixU32::new(100 * u32::from(meas.rh), 16, 1), FixI16::new(meas.temp, 8, 1));
                                 status(s.as_str());
                             },
                             Err(_) => {

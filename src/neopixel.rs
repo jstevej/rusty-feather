@@ -43,7 +43,7 @@ impl Neopixel {
         if tokens.len() == 2 && tokens[1] == "get" {
             let mut s: String<MSG_SIZE> = String::new();
             let _ = uwrite!(s, "neo: value: {} {} {}", self.value.r, self.value.g, self.value.b);
-            return CommandResult::Info(s);
+            return CommandResult::Result(s);
         } else if tokens.len() == 2 {
             match tokens[1] {
                 "blue" => { self.value.r = 0; self.value.g = 0; self.value.b = 16; },
